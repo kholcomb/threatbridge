@@ -98,6 +98,7 @@ def _check_cache() -> list[CheckResult]:
 
 def _check_attack_bundle() -> CheckResult:
     from cve_intel.config import settings
+    from cve_intel.fetchers.attack_data import ATTACK_VERSION, _version_file, _bundle_version_stale
 
     bundle_path: Path
     if settings.attack_bundle_path and settings.attack_bundle_path.exists():
@@ -116,17 +117,25 @@ def _check_attack_bundle() -> CheckResult:
     size_mb = stat.st_size / (1024 * 1024)
     age_days = (datetime.now(timezone.utc).timestamp() - stat.st_mtime) / 86400
 
+    vfile = _version_file(bundle_path)
+    cached_version = vfile.read_text(encoding="utf-8").strip() if vfile.exists() else "unknown"
+    version_ok = cached_version == ATTACK_VERSION
+
+    detail = f"{cached_version}  {size_mb:.0f} MB  age={age_days:.0f} days"
+
+    if not version_ok:
+        return CheckResult(
+            "ATT&CK bundle",
+            "WARN",
+            f"{detail} — version mismatch (want {ATTACK_VERSION}, have {cached_version}); will re-download on next run",
+        )
     if age_days > 30:
         return CheckResult(
             "ATT&CK bundle",
             "WARN",
-            f"{bundle_path.name}  {size_mb:.0f} MB  age={age_days:.0f} days (consider refreshing)",
+            f"{detail} (bundle is pinned to {ATTACK_VERSION} — age warning is informational only)",
         )
-    return CheckResult(
-        "ATT&CK bundle",
-        "PASS",
-        f"{bundle_path.name}  {size_mb:.0f} MB  age={age_days:.0f} days",
-    )
+    return CheckResult("ATT&CK bundle", "PASS", detail)
 
 
 def _check_dependencies() -> list[CheckResult]:

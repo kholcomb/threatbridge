@@ -144,6 +144,9 @@ def get_attack_data(
     Caches the parsed data at module level so the 80 MB bundle is only
     loaded and parsed once per process. Thread-safe via a module-level lock.
 
+    Re-downloads if the cached bundle was built from a different ATTACK_VERSION
+    than the one currently defined in this module.
+
     Args:
         progress_callback: Optional ``(bytes_written, total_bytes)`` callable
             called during download for progress reporting.
@@ -152,12 +155,12 @@ def get_attack_data(
     if _CACHED_ATTACK_DATA is not None:
         return _CACHED_ATTACK_DATA
     with _CACHE_LOCK:
-        # Re-check inside the lock — another thread may have populated it.
         if _CACHED_ATTACK_DATA is not None:
             return _CACHED_ATTACK_DATA
         bundle_path = _resolve_bundle_path()
-        if not bundle_path.exists():
+        if not bundle_path.exists() or _bundle_version_stale(bundle_path):
             _download_bundle(bundle_path, progress_callback=progress_callback)
+            _write_bundle_version(bundle_path)
         _CACHED_ATTACK_DATA = AttackData(bundle_path)
     return _CACHED_ATTACK_DATA
 
@@ -168,6 +171,22 @@ def _resolve_bundle_path() -> Path:
     cache_dir = settings.cache_dir / "attack"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "enterprise-attack.json"
+
+
+def _version_file(bundle_path: Path) -> Path:
+    return bundle_path.with_suffix(".version")
+
+
+def _bundle_version_stale(bundle_path: Path) -> bool:
+    """Return True if the cached bundle version doesn't match ATTACK_VERSION."""
+    vfile = _version_file(bundle_path)
+    if not vfile.exists():
+        return True
+    return vfile.read_text(encoding="utf-8").strip() != ATTACK_VERSION
+
+
+def _write_bundle_version(bundle_path: Path) -> None:
+    _version_file(bundle_path).write_text(ATTACK_VERSION, encoding="utf-8")
 
 
 def _download_bundle(
