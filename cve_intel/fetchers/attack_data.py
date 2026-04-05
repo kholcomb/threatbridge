@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -130,6 +131,7 @@ class AttackData:
 
 
 _CACHED_ATTACK_DATA: "AttackData | None" = None
+_CACHE_LOCK = threading.Lock()
 
 
 def get_attack_data(
@@ -138,7 +140,7 @@ def get_attack_data(
     """Return an AttackData instance, downloading the bundle if needed.
 
     Caches the parsed data at module level so the 80 MB bundle is only
-    loaded and parsed once per process.
+    loaded and parsed once per process. Thread-safe via a module-level lock.
 
     Args:
         progress_callback: Optional ``(bytes_written, total_bytes)`` callable
@@ -147,10 +149,14 @@ def get_attack_data(
     global _CACHED_ATTACK_DATA
     if _CACHED_ATTACK_DATA is not None:
         return _CACHED_ATTACK_DATA
-    bundle_path = _resolve_bundle_path()
-    if not bundle_path.exists():
-        _download_bundle(bundle_path, progress_callback=progress_callback)
-    _CACHED_ATTACK_DATA = AttackData(bundle_path)
+    with _CACHE_LOCK:
+        # Re-check inside the lock — another thread may have populated it.
+        if _CACHED_ATTACK_DATA is not None:
+            return _CACHED_ATTACK_DATA
+        bundle_path = _resolve_bundle_path()
+        if not bundle_path.exists():
+            _download_bundle(bundle_path, progress_callback=progress_callback)
+        _CACHED_ATTACK_DATA = AttackData(bundle_path)
     return _CACHED_ATTACK_DATA
 
 

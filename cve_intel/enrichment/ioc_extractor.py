@@ -1,7 +1,10 @@
 """IOC extraction — deterministic regex + Claude-powered inference."""
 
+import logging
 import re
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 from cve_intel.enrichment.claude_client import ClaudeClient
 from cve_intel.enrichment.prompts import (
@@ -102,10 +105,12 @@ class IOCExtractor:
         try:
             ioc_type = IOCType(raw["ioc_type"])
         except ValueError:
+            logger.warning("Unknown IOC type %r from Claude — defaulting to BEHAVIORAL", raw.get("ioc_type"))
             ioc_type = IOCType.BEHAVIORAL
         try:
             confidence = IOCConfidence(raw["confidence"])
         except ValueError:
+            logger.warning("Unknown IOC confidence %r from Claude — defaulting to INFERRED", raw.get("confidence"))
             confidence = IOCConfidence.INFERRED
 
         return IOC(

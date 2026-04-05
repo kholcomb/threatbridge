@@ -1,6 +1,10 @@
 """Claude-powered ATT&CK technique enrichment."""
 
+import logging
+
 from cve_intel.enrichment.claude_client import ClaudeClient
+
+logger = logging.getLogger(__name__)
 from cve_intel.enrichment.prompts import (
     ATTACK_ENRICHER_SYSTEM,
     ATTACK_ENRICHER_USER,
@@ -68,6 +72,8 @@ class AttackEnricher:
                     "rationale": added["rationale"],
                 })
                 kept.append(tech)
+            else:
+                logger.warning("Claude suggested technique %r not found in ATT&CK bundle — skipping", tid)
 
         return AttackMapping(
             cve_id=cve.cve_id,

@@ -53,7 +53,7 @@ def render_sarif(results: "list[AnalysisResult]") -> dict:
         score: float | None = None
         severity: str | None = None
         vector: str | None = None
-        description = cve.description or ""
+        description = cve.description_en or ""
 
         if cve.primary_cvss:
             score = cve.primary_cvss.base_score
@@ -92,9 +92,10 @@ def render_sarif(results: "list[AnalysisResult]") -> dict:
             "level": level,
             "message": {
                 "text": (
-                    f"{cve_id} — CVSS {score} ({severity}). "
-                    f"ATT&CK: {', '.join(technique_ids) if technique_ids else 'none mapped'}. "
-                    f"{description[:256]}"
+                    f"{cve_id}"
+                    + (f" — CVSS {score} ({severity.value if hasattr(severity, 'value') else severity})" if score is not None else "")
+                    + f". ATT&CK: {', '.join(technique_ids) if technique_ids else 'none mapped'}."
+                    + (f" {description[:256]}" if description else "")
                 ).strip()
             },
             "locations": [],
