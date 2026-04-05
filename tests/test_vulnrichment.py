@@ -136,3 +136,44 @@ def test_fetch_logs_warning_on_non_404_http_error(caplog):
     assert result.available is False
     assert any("503" in record.message or "Vulnrichment fetch failed" in record.message
                for record in caplog.records)
+
+
+def test_fetch_retries_on_503_then_succeeds():
+    """First call returns 503, second call returns valid JSON; result must have available=True."""
+    import urllib.error
+
+    http_503 = urllib.error.HTTPError(
+        url="https://example.com", code=503, msg="Service Unavailable", hdrs={}, fp=None
+    )
+    call_count = 0
+
+    def side_effect(req, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise http_503
+        return _mock_response(SAMPLE_CISA_RESPONSE)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        with patch("time.sleep"):  # suppress actual sleeping in tests
+            result = fetch_vulnrichment("CVE-2024-21762")
+
+    assert result.available is True
+    assert result.in_kev is True
+    assert call_count == 2
+
+
+def test_fetch_exhausts_retries_on_persistent_503():
+    """All 3 attempts return 503; result must have available=False."""
+    import urllib.error
+
+    http_503 = urllib.error.HTTPError(
+        url="https://example.com", code=503, msg="Service Unavailable", hdrs={}, fp=None
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_503) as mock_urlopen:
+        with patch("time.sleep"):
+            result = fetch_vulnrichment("CVE-2024-21762")
+
+    assert result.available is False
+    assert mock_urlopen.call_count == 3

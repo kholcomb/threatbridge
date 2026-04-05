@@ -154,3 +154,37 @@ def test_fetch_logs_warning_on_non_404_http_error(caplog):
     assert result.found is False
     assert any("SigmaHQ directory listing failed" in record.message
                for record in caplog.records)
+
+
+def test_fetch_retries_directory_listing_on_503():
+    """First directory listing returns 503, second returns valid JSON; result must have found=True."""
+    import urllib.error
+
+    http_503 = urllib.error.HTTPError(
+        url="https://api.github.com", code=503, msg="Service Unavailable", hdrs={}, fp=None
+    )
+    call_count = 0
+
+    def side_effect(req, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock = MagicMock()
+        mock.__enter__ = lambda s: s
+        mock.__exit__ = MagicMock(return_value=False)
+        if "contents/rules-emerging-threats" in url:
+            if call_count == 1:
+                raise http_503
+            mock.read.return_value = DIR_LISTING
+            return mock
+        # rule file fetch
+        mock.read.return_value = SAMPLE_RULE.encode()
+        return mock
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        with patch("time.sleep"):
+            result = fetch_community_rules("CVE-2024-3400")
+
+    assert result.found is True
+    assert len(result.rules) == 1
+    assert call_count >= 2  # at least one retry of the directory listing

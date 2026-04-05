@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -64,28 +65,46 @@ def _cve_url(cve_id: str) -> str:
     return f"{_BASE_URL}/{year}/{bucket}/{cve_id.upper()}.json"
 
 
+_RETRY_DELAYS = [1, 2]  # seconds to sleep after 1st and 2nd failure
+_MAX_ATTEMPTS = 3
+
+
 def fetch_vulnrichment(cve_id: str) -> VulnrichmentData:
     """Fetch CISA Vulnrichment data for a CVE.
 
     Returns a VulnrichmentData with available=False if no entry exists
-    or the request fails. Never raises.
+    or the request fails. Never raises. Retries up to 3 times total on
+    transient errors (5xx, URLError, OSError) with exponential backoff.
     """
+    import json
+
     result = VulnrichmentData(cve_id=cve_id)
-    try:
-        url = _cve_url(cve_id)
-        req = urllib.request.Request(url, headers={"User-Agent": "cve-intel/0.1"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            import json
-            data = json.loads(r.read())
-    except urllib.error.HTTPError as exc:
-        if exc.code != 404:
-            logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
-        return result
-    except (urllib.error.URLError, OSError) as exc:
-        logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
-        return result
-    except Exception as exc:
-        logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
+    url = _cve_url(cve_id)
+    req = urllib.request.Request(url, headers={"User-Agent": "cve-intel/0.1"})
+
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        if attempt > 0:
+            time.sleep(_RETRY_DELAYS[attempt - 1])
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            last_exc = None
+            break  # success
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                # 4xx — definitive answer, no retry
+                if exc.code != 404:
+                    logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
+                return result
+            last_exc = exc
+        except (urllib.error.URLError, OSError) as exc:
+            last_exc = exc
+        except Exception as exc:
+            last_exc = exc
+    else:
+        # All attempts exhausted
+        logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, last_exc)
         return result
 
     result.available = True
