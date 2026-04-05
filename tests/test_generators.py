@@ -5,6 +5,7 @@ import pytest
 from cve_intel.generators.sigma_gen import SigmaGenerator
 from cve_intel.generators.yara_gen import YaraGenerator
 from cve_intel.generators.snort_gen import SnortGenerator
+from cve_intel.generators.suricata_gen import SuricataGenerator
 from cve_intel.models.attack import AttackMapping
 from cve_intel.models.ioc import IOCBundle
 from cve_intel.models.rules import RuleFormat
@@ -162,3 +163,45 @@ def test_snort_generator_returns_rule(mocker, sample_cve_record):
     assert "alert" in rule.rule_text
     assert "/ssl-vpn/portal.cgi" in rule.rule_text
     assert "CVE-2024-21762" in rule.rule_text or "CVE_2024_21762" in rule.rule_text
+
+
+def test_suricata_generator_returns_rule(mocker, sample_cve_record):
+    client = mocker.MagicMock()
+    client.complete_structured.return_value = {
+        "rule_text": (
+            'alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS '
+            '(msg:"CVE-2024-21762 FortiOS SSL-VPN RCE Attempt"; '
+            'flow:established,to_server; '
+            'http.method; content:"POST"; '
+            'http.uri; content:"/ssl-vpn/portal.cgi"; '
+            'sid:9000002; rev:1; '
+            'metadata:affected_product FortiOS, cve CVE-2024-21762;)'
+        ),
+        "name": "CVE-2024-21762 FortiOS Suricata Detection",
+        "description": "Suricata rule for FortiOS SSL-VPN RCE",
+        "severity": "critical",
+        "confidence": "medium",
+    }
+
+    mapping = AttackMapping(cve_id=sample_cve_record.cve_id, techniques=[])
+    iocs = IOCBundle(cve_id=sample_cve_record.cve_id)
+
+    gen = SuricataGenerator(client)
+    rule = gen.generate(sample_cve_record, mapping, iocs)
+
+    assert rule is not None
+    assert rule.rule_format == RuleFormat.SURICATA
+    assert "alert" in rule.rule_text
+    assert "/ssl-vpn/portal.cgi" in rule.rule_text
+    assert "CVE-2024-21762" in rule.rule_text or "CVE_2024_21762" in rule.rule_text
+
+
+def test_suricata_semantics_flags_snort_style_modifiers(mocker):
+    """Snort-style modifiers in Suricata rules should trigger a quality warning."""
+    gen = SuricataGenerator.__new__(SuricataGenerator)
+    snort_style = (
+        'alert http any any -> any any (msg:"test"; '
+        'content:"/exploit"; http_uri; sid:1; rev:1;)'
+    )
+    warnings = gen._check_suricata_semantics(snort_style)
+    assert any("http.uri" in w for w in warnings)

@@ -40,9 +40,10 @@ class RuleBundle(BaseModel):
     sigma_rules: list[DetectionRule] = Field(default_factory=list)
     yara_rules: list[DetectionRule] = Field(default_factory=list)
     snort_rules: list[DetectionRule] = Field(default_factory=list)
+    suricata_rules: list[DetectionRule] = Field(default_factory=list)
 
     def all_rules(self) -> list[DetectionRule]:
-        return self.sigma_rules + self.yara_rules + self.snort_rules
+        return self.sigma_rules + self.yara_rules + self.snort_rules + self.suricata_rules
 
 
 class AnalysisResult(BaseModel):

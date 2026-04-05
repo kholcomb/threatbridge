@@ -14,6 +14,7 @@ from cve_intel.fetchers.attack_data import AttackData, get_attack_data
 from cve_intel.fetchers.nvd import NVDFetcher
 from cve_intel.generators.sigma_gen import SigmaGenerator
 from cve_intel.generators.snort_gen import SnortGenerator
+from cve_intel.generators.suricata_gen import SuricataGenerator
 from cve_intel.generators.yara_gen import YaraGenerator
 from cve_intel.mappers.cvss_to_attack import map_cvss_to_attack
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
@@ -23,7 +24,7 @@ from cve_intel.models.rules import AnalysisResult, RuleBundle
 
 CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
-RuleFormats = set[Literal["sigma", "yara", "snort"]]
+RuleFormats = set[Literal["sigma", "yara", "snort", "suricata"]]
 
 
 def analyze(
@@ -37,11 +38,11 @@ def analyze(
     Args:
         cve_id: CVE identifier, e.g. "CVE-2024-21762"
         enrich: Whether to use Claude for enrichment and rule generation.
-        rule_formats: Which rule formats to generate. Defaults to all three.
+        rule_formats: Which rule formats to generate. Defaults to all four.
         attack_data: Pre-loaded ATT&CK data (avoids re-downloading in batch mode).
     """
     if rule_formats is None:
-        rule_formats = {"sigma", "yara", "snort"}
+        rule_formats = {"sigma", "yara", "snort", "suricata"}
 
     # Stage 1: Validate
     cve_id = cve_id.strip().upper()
@@ -142,5 +143,11 @@ def _generate_rules(
         rule = gen.generate(cve_record, mapping, ioc_bundle)
         if rule:
             bundle.snort_rules.append(rule)
+
+    if "suricata" in rule_formats:
+        gen = SuricataGenerator(client)
+        rule = gen.generate(cve_record, mapping, ioc_bundle)
+        if rule:
+            bundle.suricata_rules.append(rule)
 
     return bundle

@@ -308,6 +308,47 @@ SNORT_GEN_SCHEMA = {
     "required": ["rule_text", "name", "description", "severity", "confidence"],
 }
 
+SURICATA_GEN_SYSTEM = """\
+You are a network security engineer specializing in Suricata IDS/IPS rules.
+
+Rules:
+- Use valid Suricata rule syntax with sticky buffers (http.uri, http.method, \
+  http.request_body, dns.query.name, tls.sni, etc.) — NOT Snort-style modifiers \
+  like http_uri or http_method.
+- Include sid, rev, msg, classtype, and metadata fields.
+- Base ALL content match keywords exclusively on the Network IOCs provided in the \
+  user message. Do not add content strings not present in the IOC list or CVE description.
+- If the Network IOCs section is empty, only produce rules for patterns explicitly described \
+  in the CVE description itself. Do not generate placeholder rules for undescribed traffic.
+- Use flow:established,to_server where appropriate.
+- Use app-layer-protocol: for application layer matching where applicable.
+"""
+
+SURICATA_GEN_USER = """\
+Write a Suricata network detection rule for this CVE.
+
+CVE ID: {cve_id}
+Description: {description}
+Affected Products: {products}
+ATT&CK Techniques: {techniques}
+Network IOCs:
+{iocs}
+
+Return the Suricata rule and metadata using the provided tool.
+"""
+
+SURICATA_GEN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rule_text": {"type": "string", "description": "Complete Suricata rule"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "severity": {"type": "string", "enum": ["informational", "low", "medium", "high", "critical"]},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+    },
+    "required": ["rule_text", "name", "description", "severity", "confidence"],
+}
+
 SIGMA_FIX_USER = """\
 The following Sigma rule has a syntax error. Fix it.
 
