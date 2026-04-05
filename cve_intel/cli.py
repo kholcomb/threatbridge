@@ -48,12 +48,15 @@ def cli() -> None:
               help="Comma-separated list of rule formats to generate.")
 @click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
               help="Skip Claude enrichment (deterministic only, no API key needed).")
+@click.option("--force-refresh", "force_refresh", is_flag=True, default=False,
+              help="Bypass the NVD cache and fetch live data, overwriting the cached entry.")
 def analyze(
     cve_id: str,
     output: str | None,
     fmt: str,
     rules: str,
     no_enrich: bool,
+    force_refresh: bool,
 ) -> None:
     """Run full analysis pipeline on a single CVE ID.
 
@@ -87,6 +90,7 @@ def analyze(
             rule_formats=rule_formats,
             attack_data=attack_data,
             progress=prog,
+            force_refresh=force_refresh,
         )
     except Exception as exc:
         prog.stop()

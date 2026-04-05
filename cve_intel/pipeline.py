@@ -42,6 +42,7 @@ def analyze(
     attack_data: AttackData | None = None,
     progress: "ProgressContext | None" = None,
     extract_iocs: bool = True,
+    force_refresh: bool = False,
 ) -> AnalysisResult:
     """Run the full CVE analysis pipeline.
 
@@ -69,7 +70,7 @@ def analyze(
     # Stage 2: NVD Fetch
     prog.advance("Fetching NVD record")
     fetcher = NVDFetcher()
-    cve_record = fetcher.fetch(cve_id)
+    cve_record = fetcher.fetch(cve_id, force_refresh=force_refresh)
 
     # Stage 2b: CISA Vulnrichment (non-blocking — failure returns empty data)
     prog.advance("Fetching CISA Vulnrichment data")

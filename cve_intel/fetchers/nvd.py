@@ -66,12 +66,13 @@ class NVDFetcher:
             raise ValueError(f"Invalid CVE ID format: {cve_id!r}. Expected CVE-YYYY-NNNN.")
         return cve_id
 
-    def fetch(self, cve_id: str) -> CVERecord:
+    def fetch(self, cve_id: str, force_refresh: bool = False) -> CVERecord:
         cve_id = self.validate_cve_id(cve_id)
         cache_key = f"nvd:{cve_id}"
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return CVERecord.model_validate(cached)
+        if not force_refresh:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return CVERecord.model_validate(cached)
 
         raw = self._fetch_raw(cve_id)
         record = self._parse(raw)
