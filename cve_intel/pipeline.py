@@ -202,7 +202,12 @@ def _generate_rules(
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as executor:
         futures = {executor.submit(_run, gen_cls, attr): fmt for fmt, gen_cls, attr in active}
         for future in concurrent.futures.as_completed(futures):
-            attr, rule = future.result()
+            fmt = futures[future]
+            try:
+                attr, rule = future.result()
+            except Exception as exc:
+                logger.warning("Rule generation failed for format %r: %s", fmt, exc)
+                continue
             if rule:
                 getattr(bundle, attr).append(rule)
 

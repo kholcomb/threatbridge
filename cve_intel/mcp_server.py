@@ -31,12 +31,28 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Load ATT&CK STIX data once at startup and share across all tool calls."""
+    from cve_intel.fetchers.attack_data import AttackDataError
     try:
         attack_data: AttackData = get_attack_data()
-    except Exception as exc:
-        logger.error("Failed to load ATT&CK data at startup: %s", exc)
+    except AttackDataError as exc:
+        # Network or filesystem failure — log clearly and start degraded so
+        # operators can still use non-ATT&CK tools (fetch_cve, triage, etc.).
+        logger.error(
+            "ATT&CK bundle unavailable at startup (%s: %s). "
+            "ATT&CK-dependent tools will return errors until the server is restarted.",
+            type(exc).__name__, exc,
+        )
         yield {"attack_data": None}
         return
+    except Exception as exc:
+        # Unexpected error (e.g. corrupt JSON, permission denied on cache dir).
+        # Re-raise so the process exits with a clear traceback rather than
+        # silently serving broken results.
+        logger.critical(
+            "Unexpected error loading ATT&CK data (%s: %s) — aborting startup.",
+            type(exc).__name__, exc,
+        )
+        raise
     yield {"attack_data": attack_data}
 
 

@@ -582,8 +582,8 @@ def test_lifespan_yields_none_on_attack_data_failure():
     asyncio.run(_run())
 
 
-def test_lifespan_yields_none_on_unexpected_error():
-    """lifespan yields attack_data=None for any unexpected exception, not just AttackDataError."""
+def test_lifespan_raises_on_unexpected_error():
+    """lifespan re-raises unexpected exceptions (not AttackDataError) so the process exits cleanly."""
     from cve_intel.mcp_server import lifespan
     mock_server = MagicMock()
 
@@ -592,8 +592,9 @@ def test_lifespan_yields_none_on_unexpected_error():
             "cve_intel.mcp_server.get_attack_data",
             side_effect=RuntimeError("disk full"),
         ):
-            async with lifespan(mock_server) as ctx:
-                assert ctx["attack_data"] is None
+            with pytest.raises(RuntimeError, match="disk full"):
+                async with lifespan(mock_server) as ctx:
+                    pass  # should not reach here
 
     asyncio.run(_run())
 
