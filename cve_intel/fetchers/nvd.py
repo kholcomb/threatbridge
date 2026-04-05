@@ -70,7 +70,15 @@ class NVDFetcher:
         if resp.status_code == 404:
             raise NVDNotFoundError(f"CVE {cve_id} not found in NVD.")
         if resp.status_code == 403:
-            raise NVDRateLimitError("NVD rate limit exceeded. Add NVD_API_KEY or wait 30 seconds.")
+            body = resp.text[:300].strip()
+            if any(w in body.lower() for w in ("network policy", "blocked", "firewall", "proxy")):
+                raise NVDRateLimitError(
+                    f"NVD request blocked by network policy (firewall/proxy). "
+                    f"NVD may not be reachable from this environment. Detail: {body}"
+                )
+            raise NVDRateLimitError(
+                "NVD rate limit exceeded. Add NVD_API_KEY or wait 30 seconds."
+            )
         if resp.status_code == 503:
             raise NVDError("NVD API is unavailable (503). Try again later.")
         if not resp.ok:

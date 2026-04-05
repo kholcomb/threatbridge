@@ -4,6 +4,11 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Anchor .env lookup to the project root regardless of working directory.
+# This matters for the MCP server, which may start from any cwd.
+_PROJECT_ROOT = Path(__file__).parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 def _default_cache_dir() -> Path:
     # XDG on Linux, ~/Library/Caches on macOS, %LOCALAPPDATA% on Windows
@@ -15,7 +20,7 @@ def _default_cache_dir() -> Path:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), env_file_encoding="utf-8")
 
     anthropic_api_key: str = ""
     nvd_api_key: str = ""

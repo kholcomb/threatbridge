@@ -5,8 +5,20 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.panel import Panel
 
 console = Console()
+err_console = Console(stderr=True)
+
+
+def _print_warnings(warnings: list[str]) -> None:
+    """Render pipeline warnings to stderr as a yellow panel."""
+    if not warnings:
+        return
+    body = "\n".join(f"• {w}" for w in warnings)
+    err_console.print(
+        Panel(body, title="[bold yellow]Warnings[/bold yellow]", border_style="yellow")
+    )
 
 
 @click.group()
@@ -19,67 +31,111 @@ def cli() -> None:
 
 
 @cli.command()
-@click.argument("cve_id")
+@click.argument("cve_id", required=False, default=None)
 @click.option("--output", "-o", type=click.Path(), default=None,
               help="Output directory (writes JSON + rule files).")
-@click.option("--format", "-f", "fmt", type=click.Choice(["text", "json", "both"]),
+@click.option("--format", "-f", "fmt",
+              type=click.Choice(["text", "json", "both", "sarif"]),
               default="both", show_default=True,
               help="Output format.")
+@click.option("--sarif", "sarif_file", type=click.Path(), default=None,
+              help="Write SARIF 2.1.0 output to FILE (shortcut for --format sarif).")
 @click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
               help="Comma-separated list of rule formats to generate.")
 @click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
               help="Skip Claude enrichment (deterministic only, no API key needed).")
 @click.option("--batch", type=click.Path(exists=True), default=None,
-              help="Path to file with newline-separated CVE IDs for batch processing.")
+              help="Path to file with newline-separated CVE IDs. "
+                   "Cannot be combined with CVE_ID.")
 def analyze(
-    cve_id: str,
+    cve_id: str | None,
     output: str | None,
     fmt: str,
+    sarif_file: str | None,
     rules: str,
     no_enrich: bool,
     batch: str | None,
 ) -> None:
     """Run full analysis pipeline on a CVE ID."""
+    # Mutual-exclusivity guard
+    if batch and cve_id:
+        raise click.UsageError("Cannot use CVE_ID with --batch; use one or the other.")
+    if not batch and not cve_id:
+        raise click.UsageError("Must provide CVE_ID or --batch FILE.")
+
+    # --sarif FILE implies format=sarif
+    if sarif_file:
+        fmt = "sarif"
+        output = sarif_file
+
     from cve_intel import pipeline
     from cve_intel.output import json_renderer, text_renderer
     from cve_intel.fetchers.attack_data import get_attack_data
+    from cve_intel.progress import RichProgress
 
     rule_formats = set(r.strip().lower() for r in rules.split(",") if r.strip())
     enrich = not no_enrich
-    output_dir = Path(output) if output else None
+    output_dir = Path(output) if output and fmt != "sarif" else None
+    sarif_out = Path(output) if output and fmt == "sarif" else None
 
     if batch:
         cve_ids = [line.strip() for line in Path(batch).read_text().splitlines() if line.strip()]
     else:
         cve_ids = [cve_id]
 
-    # Pre-load ATT&CK data once for batch
-    console.print("[dim]Loading ATT&CK data...[/dim]")
+    prog = RichProgress()
+    prog.start()
+
+    # Pre-load ATT&CK data once (shared across batch items)
+    prog.advance("Loading ATT&CK data…")
     try:
-        attack_data = get_attack_data()
+        attack_data = get_attack_data(progress_callback=prog.download_callback())
     except Exception as exc:
+        prog.stop()
         console.print(f"[red]Failed to load ATT&CK data: {exc}[/red]")
         sys.exit(1)
 
+    results = []
     for cid in cve_ids:
-        console.print(f"\n[bold cyan]Analyzing {cid}...[/bold cyan]")
+        prog.advance(f"Analysing {cid}")
         try:
             result = pipeline.analyze(
                 cve_id=cid,
                 enrich=enrich,
                 rule_formats=rule_formats,
                 attack_data=attack_data,
+                progress=prog,
             )
         except Exception as exc:
+            prog.stop()
             console.print(f"[red]Error analyzing {cid}: {exc}[/red]")
             if len(cve_ids) == 1:
                 sys.exit(1)
+            prog.start()
             continue
+
+        results.append(result)
+
+    prog.stop()
+
+    for result in results:
+        _print_warnings(result.warnings)
 
         if fmt in ("text", "both"):
             text_renderer.render_text(result)
 
-        if fmt in ("json", "both") and output_dir:
+        if fmt == "sarif":
+            from cve_intel.output.sarif_renderer import render_sarif
+            import json as _json
+            sarif_data = render_sarif([result])
+            if sarif_out:
+                sarif_out.parent.mkdir(parents=True, exist_ok=True)
+                sarif_out.write_text(_json.dumps(sarif_data, indent=2))
+                console.print(f"[dim]SARIF written to {sarif_out}[/dim]")
+            else:
+                click.echo(_json.dumps(sarif_data, indent=2))
+
+        elif fmt in ("json", "both") and output_dir:
             path = json_renderer.write_json(result, output_dir)
             console.print(f"[dim]JSON written to {path}[/dim]")
             rule_paths = json_renderer.write_rules(result, output_dir / "rules")
@@ -87,6 +143,125 @@ def analyze(
                 console.print(f"[dim]Rule written to {rp}[/dim]")
         elif fmt == "json" and not output_dir:
             click.echo(json_renderer.render_json(result))
+
+
+@cli.command()
+@click.argument("cve_ids_file", type=click.Path(exists=True))
+@click.option("--format", "-f", "fmt",
+              type=click.Choice(["text", "json", "sarif"]),
+              default="text", show_default=True,
+              help="Output format.")
+@click.option("--output", "-o", type=click.Path(), default=None,
+              help="Output directory. Writes one file per CVE (JSON/SARIF).")
+@click.option("--workers", "-w", default=1, show_default=True,
+              type=click.IntRange(1, 3),
+              help="Concurrent workers (max 3; beware Claude rate limits).")
+@click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
+              help="Skip Claude enrichment.")
+@click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
+              help="Comma-separated rule formats.")
+def batch(
+    cve_ids_file: str,
+    fmt: str,
+    output: str | None,
+    workers: int,
+    no_enrich: bool,
+    rules: str,
+) -> None:
+    """Analyse multiple CVEs from a newline-separated file."""
+    import concurrent.futures
+    import json as _json
+
+    from cve_intel import pipeline
+    from cve_intel.output import json_renderer, text_renderer
+    from cve_intel.fetchers.attack_data import get_attack_data
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+
+    rule_formats = set(r.strip().lower() for r in rules.split(",") if r.strip())
+    enrich = not no_enrich
+    output_dir = Path(output) if output else None
+
+    cve_ids = [
+        line.strip()
+        for line in Path(cve_ids_file).read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    if not cve_ids:
+        console.print("[yellow]No CVE IDs found in file.[/yellow]")
+        return
+
+    console.print(f"[dim]Loading ATT&CK data…[/dim]")
+    try:
+        attack_data = get_attack_data()
+    except Exception as exc:
+        console.print(f"[red]Failed to load ATT&CK data: {exc}[/red]")
+        sys.exit(1)
+
+    results = []
+    errors = []
+
+    def _run(cid: str):
+        return pipeline.analyze(
+            cve_id=cid,
+            enrich=enrich,
+            rule_formats=rule_formats,
+            attack_data=attack_data,
+        )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=Console(stderr=True),
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Processing CVEs", total=len(cve_ids))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_cid = {executor.submit(_run, cid): cid for cid in cve_ids}
+            for future in concurrent.futures.as_completed(future_to_cid):
+                cid = future_to_cid[future]
+                progress.advance(task)
+                progress.update(task, description=f"[cyan]Processed {cid}")
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    errors.append((cid, str(exc)))
+
+    if errors:
+        for cid, err in errors:
+            err_console.print(f"[red]Error [{cid}]: {err}[/red]")
+
+    if fmt == "sarif":
+        from cve_intel.output.sarif_renderer import render_sarif
+        sarif_data = render_sarif(results)
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_file = output_dir / "results.sarif.json"
+            out_file.write_text(_json.dumps(sarif_data, indent=2))
+            console.print(f"[dim]SARIF written to {out_file}[/dim]")
+        else:
+            click.echo(_json.dumps(sarif_data, indent=2))
+        return
+
+    for result in results:
+        _print_warnings(result.warnings)
+
+        if fmt == "text":
+            text_renderer.render_text(result)
+        elif fmt == "json":
+            if output_dir:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                path = json_renderer.write_json(result, output_dir)
+                console.print(f"[dim]Written: {path}[/dim]")
+            else:
+                click.echo(json_renderer.render_json(result))
+
+    console.print(
+        f"\n[green]Done.[/green] {len(results)} succeeded, {len(errors)} failed."
+    )
 
 
 @cli.command()
@@ -108,8 +283,57 @@ def fetch(cve_id: str) -> None:
 @cli.command()
 @click.argument("cve_id")
 @click.option("--no-enrich", "no_enrich", is_flag=True, default=False)
-def map(cve_id: str, no_enrich: bool) -> None:
+@click.option("--output", "-o", type=click.Path(), default=None,
+              help="Write output to FILE instead of stdout.")
+@click.option("--format", "-f", "fmt", type=click.Choice(["text", "json"]),
+              default="text", show_default=True)
+def map(cve_id: str, no_enrich: bool, output: str | None, fmt: str) -> None:
     """Map CVE to ATT&CK techniques."""
+    from cve_intel import pipeline
+    import json as _json
+
+    try:
+        result = pipeline.analyze(cve_id, enrich=not no_enrich, rule_formats=set())
+    except Exception as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    _print_warnings(result.warnings)
+
+    m = result.attack_mapping
+
+    if fmt == "json":
+        data = _json.dumps(m.model_dump(mode="json"), indent=2, default=str)
+        if output:
+            Path(output).write_text(data)
+            console.print(f"[dim]Written to {output}[/dim]")
+        else:
+            click.echo(data)
+        return
+
+    lines = [
+        f"\n[bold yellow]ATT&CK Mapping for {cve_id}[/bold yellow]",
+        f"Method: {m.mapping_method}",
+        f"Rationale: {m.rationale}\n",
+    ]
+    for t in m.techniques:
+        lines.append(f"  {t.technique_id:12} {t.name:40} conf={t.confidence:.0%}")
+    text_out = "\n".join(lines)
+
+    if output:
+        Path(output).write_text(text_out + "\n")
+        console.print(f"[dim]Written to {output}[/dim]")
+    else:
+        for line in lines:
+            console.print(line)
+
+
+@cli.command()
+@click.argument("cve_id")
+@click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
+              help="Skip Claude enrichment (returns empty IOC list without error).")
+def iocs(cve_id: str, no_enrich: bool) -> None:
+    """Extract and display IOCs for a CVE."""
     from cve_intel import pipeline
 
     try:
@@ -118,25 +342,7 @@ def map(cve_id: str, no_enrich: bool) -> None:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
 
-    m = result.attack_mapping
-    console.print(f"\n[bold yellow]ATT&CK Mapping for {cve_id}[/bold yellow]")
-    console.print(f"Method: {m.mapping_method}")
-    console.print(f"Rationale: {m.rationale}\n")
-    for t in m.techniques:
-        console.print(f"  {t.technique_id:12} {t.name:40} conf={t.confidence:.0%}")
-
-
-@cli.command()
-@click.argument("cve_id")
-def iocs(cve_id: str) -> None:
-    """Extract and display IOCs for a CVE."""
-    from cve_intel import pipeline
-
-    try:
-        result = pipeline.analyze(cve_id, enrich=True, rule_formats=set())
-    except Exception as exc:
-        console.print(f"[red]{exc}[/red]")
-        sys.exit(1)
+    _print_warnings(result.warnings)
 
     bundle = result.ioc_bundle
     all_iocs = bundle.all_iocs()
@@ -161,6 +367,8 @@ def rules_cmd(cve_id: str, rules: str, output: str | None) -> None:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
 
+    _print_warnings(result.warnings)
+
     all_rules = result.rule_bundle.all_rules()
     console.print(f"\n[bold green]{len(all_rules)} rules generated for {cve_id}[/bold green]\n")
 
@@ -177,6 +385,37 @@ def rules_cmd(cve_id: str, rules: str, output: str | None) -> None:
 
 # Register rules command under its correct name
 cli.add_command(rules_cmd, name="rules")
+
+
+@cli.command()
+@click.option("--full", is_flag=True, default=False,
+              help="Run a live Claude API ping (requires ANTHROPIC_API_KEY).")
+def doctor(full: bool) -> None:
+    """Check configuration and connectivity health."""
+    from cve_intel.doctor import run_checks
+    from rich.table import Table
+
+    checks = run_checks(full_check=full)
+
+    table = Table(title="cve-intel health check", show_lines=False, highlight=True)
+    table.add_column("Check", style="bold")
+    table.add_column("Status", justify="center")
+    table.add_column("Detail")
+
+    any_fail = False
+    for check in checks:
+        if check.status == "PASS":
+            status_str = "[green]PASS[/green]"
+        elif check.status == "WARN":
+            status_str = "[yellow]WARN[/yellow]"
+        else:
+            status_str = "[red]FAIL[/red]"
+            any_fail = True
+        table.add_row(check.name, status_str, check.detail)
+
+    console.print(table)
+    if any_fail:
+        sys.exit(1)
 
 
 @cli.group()
@@ -207,3 +446,4 @@ def cache_stats() -> None:
     with diskcache.Cache(str(cache_path)) as c:
         console.print(f"NVD cache entries: {len(c)}")
         console.print(f"NVD cache size: {c.volume() / 1024:.1f} KB")
+    console.print(f"Cache directory: {settings.cache_dir}")

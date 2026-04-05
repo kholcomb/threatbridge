@@ -494,8 +494,9 @@ def test_search_techniques_returns_error_when_attack_data_none():
     from cve_intel.mcp_server import search_techniques
     result = search_techniques("exploit", ctx)
 
-    assert isinstance(result, dict)
-    assert "error" in result
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "error" in result[0]
 
 
 def test_compare_sigma_rule_with_community_returns_error_when_attack_data_none(mocker):

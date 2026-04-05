@@ -48,7 +48,7 @@ data these tools return.
 ## Tool groups
 
 - **Raw data**: fetch_cve, get_exploitation_context
-- **ATT&CK mapping**: get_attack_techniques, get_cve_summary, lookup_technique, search_techniques
+- **ATT&CK mapping**: get_attack_techniques, get_cve_summary, lookup_technique, search_techniques, get_related_techniques
 - **Triage**: triage_cve, batch_triage_cves
 - **Detection**: get_community_sigma_rules, compare_sigma_rule_with_community
 
@@ -60,7 +60,7 @@ data these tools return.
 
 **2. Single CVE investigation**
    triage_cve → get_exploitation_context → lookup_technique per mapped technique →
-   get_community_sigma_rules → synthesise risk narrative
+   get_related_techniques to expand threat model → get_community_sigma_rules → synthesise risk narrative
 
 **3. Detection coverage assessment**
    get_attack_techniques → get_community_sigma_rules →
@@ -395,31 +395,196 @@ def lookup_technique(technique_id: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp.tool()
-def search_techniques(query: str, ctx: Context) -> list[dict[str, Any]]:
+def search_techniques(
+    query: str,
+    ctx: Context,
+    tactic: str = "",
+    platform: str = "",
+    limit: int = 10,
+) -> list[dict[str, Any]]:
     """Search MITRE ATT&CK techniques by name or keyword.
 
-    Returns up to 10 matching techniques with their IDs, names, descriptions,
-    and tactic associations. Searches both technique names and descriptions.
+    Returns up to `limit` (default 10, max 25) techniques ranked by relevance:
+    name matches score higher than tactic-name matches, which score higher than
+    description matches. Results from the same parent technique are grouped.
+
+    Optional filters:
+    - tactic: ATT&CK tactic shortname to restrict results, e.g. "initial-access",
+      "lateral-movement", "privilege-escalation", "defense-evasion", "execution"
+    - platform: restrict to techniques targeting a specific platform, e.g.
+      "Windows", "Linux", "macOS", "Containers", "Network Devices"
+
+    Each result includes a `relevance_score` (higher = better match) so you
+    can judge result quality. Descriptions are trimmed to 200 characters.
 
     Useful for finding relevant techniques when you know the attack concept
     but not the specific technique ID.
     """
     attack_data: AttackData = ctx.request_context.lifespan_context["attack_data"]
     if attack_data is None:
-        return {"error": "ATT&CK data unavailable — server failed to load bundle at startup"}
-    tokens = query.lower().split()
+        return [{"error": "ATT&CK data unavailable — server failed to load bundle at startup"}]
 
-    matches = []
+    limit = min(max(1, limit), 25)
+    tokens = [t for t in query.lower().split() if t]
+    tactic_filter = tactic.lower().strip()
+    platform_filter = platform.lower().strip()
+
+    scored: list[tuple[int, Any]] = []
+
     for tid in attack_data.all_technique_ids:
         tech = attack_data.get_technique(tid)
-        if tech:
-            haystack = tech.name.lower() + " " + tech.description.lower()
-            if all(token in haystack for token in tokens):
-                matches.append(tech)
-        if len(matches) >= 10:
-            break
+        if not tech:
+            continue
 
-    return [t.model_dump(mode="json") for t in matches]
+        # Tactic filter
+        if tactic_filter:
+            tactic_shortnames = [tac.shortname for tac in tech.tactics]
+            if tactic_filter not in tactic_shortnames:
+                continue
+
+        # Platform filter
+        if platform_filter:
+            if not any(platform_filter in p.lower() for p in tech.platforms):
+                continue
+
+        # Relevance scoring
+        name_lower = tech.name.lower()
+        desc_lower = tech.description.lower()
+        tactic_names_lower = " ".join(tac.name.lower() for tac in tech.tactics)
+
+        score = 0
+        for token in tokens:
+            if token in name_lower:
+                score += 10          # name match: highest weight
+            if token in tactic_names_lower:
+                score += 4           # tactic name match: medium weight
+            if token in desc_lower:
+                score += 1           # description match: lowest weight
+
+        if score == 0:
+            continue
+
+        scored.append((score, tech))
+
+    # Sort by score descending, stable secondary sort by technique ID
+    scored.sort(key=lambda x: (-x[0], x[1].technique_id))
+
+    out = []
+    for score, tech in scored[:limit]:
+        d = tech.model_dump(mode="json")
+        d["description"] = d["description"][:200] + ("…" if len(d["description"]) > 200 else "")
+        d["relevance_score"] = score
+        out.append(d)
+
+    return out
+
+
+@mcp.tool()
+def get_related_techniques(technique_id: str, ctx: Context) -> dict[str, Any]:
+    """Find MITRE ATT&CK techniques related to a given technique ID.
+
+    Returns three relationship groups, each useful for a different purpose:
+
+    - siblings: other sub-techniques of the same parent (e.g. all T1059.xxx when
+      given T1059.001). Directly adjacent — same parent tactic and detection surface.
+
+    - same_tactic_and_platform: techniques sharing both a tactic AND at least one
+      platform with the input technique. Useful for "what else could an attacker do
+      at this stage on this OS?"
+
+    - shared_data_sources: techniques with overlapping data sources. Useful for
+      detection engineering — if you already have a log source covering the input
+      technique, these are candidates you could detect with the same pipeline.
+
+    Each result includes a `relevance_score` and descriptions trimmed to 200 chars.
+
+    Typical use: after triage_cve returns technique IDs, call this to expand the
+    threat model beyond the directly mapped techniques.
+    """
+    attack_data: AttackData = ctx.request_context.lifespan_context["attack_data"]
+    if attack_data is None:
+        return {"error": "ATT&CK data unavailable — server failed to load bundle at startup"}
+
+    tid = technique_id.strip().upper()
+    anchor = attack_data.get_technique(tid)
+    if anchor is None:
+        return {"error": f"Technique '{technique_id}' not found. Check the ID format (e.g. T1190 or T1059.001)."}
+
+    anchor_tactic_ids = {tac.tactic_id for tac in anchor.tactics}
+    anchor_platforms = {p.lower() for p in anchor.platforms}
+    anchor_data_sources = set(anchor.data_sources)
+
+    siblings: list[dict] = []
+    same_tactic_platform: list[dict] = []
+    shared_data_sources: list[dict] = []
+
+    for other_id in attack_data.all_technique_ids:
+        if other_id == tid:
+            continue
+        other = attack_data.get_technique(other_id)
+        if not other:
+            continue
+
+        other_tactic_ids = {tac.tactic_id for tac in other.tactics}
+        other_platforms = {p.lower() for p in other.platforms}
+        other_data_sources = set(other.data_sources)
+
+        # Group 1: siblings — share the same parent technique
+        if anchor.is_subtechnique and other.is_subtechnique and anchor.parent_id == other.parent_id:
+            d = _technique_summary(other)
+            d["relevance_score"] = 10
+            siblings.append(d)
+            continue
+
+        # Also treat the parent itself as a sibling if we're a sub-technique
+        if anchor.is_subtechnique and not other.is_subtechnique and other_id == anchor.parent_id:
+            d = _technique_summary(other)
+            d["relevance_score"] = 8
+            siblings.append(d)
+            continue
+
+        # Group 2: same tactic AND at least one platform overlap
+        shared_tactics = anchor_tactic_ids & other_tactic_ids
+        shared_platforms = anchor_platforms & other_platforms
+        if shared_tactics and shared_platforms:
+            score = len(shared_tactics) * 3 + len(shared_platforms)
+            d = _technique_summary(other)
+            d["relevance_score"] = score
+            d["shared_tactics"] = [t for t in other.tactics if t.tactic_id in shared_tactics]
+            same_tactic_platform.append(d)
+
+        # Group 3: shared data sources (detection overlap)
+        shared_ds = anchor_data_sources & other_data_sources
+        if len(shared_ds) >= 2:
+            d = _technique_summary(other)
+            d["relevance_score"] = len(shared_ds)
+            d["shared_data_sources"] = sorted(shared_ds)
+            shared_data_sources.append(d)
+
+    # Sort each group by relevance descending
+    siblings.sort(key=lambda x: -x["relevance_score"])
+    same_tactic_platform.sort(key=lambda x: -x["relevance_score"])
+    shared_data_sources.sort(key=lambda x: -x["relevance_score"])
+
+    return {
+        "anchor": _technique_summary(anchor),
+        "siblings": siblings[:10],
+        "same_tactic_and_platform": same_tactic_platform[:10],
+        "shared_data_sources": shared_data_sources[:10],
+    }
+
+
+def _technique_summary(tech: Any) -> dict[str, Any]:
+    """Compact technique dict for relationship results."""
+    return {
+        "technique_id": tech.technique_id,
+        "name": tech.name,
+        "description": tech.description[:200] + ("…" if len(tech.description) > 200 else ""),
+        "tactics": [t.model_dump(mode="json") for t in tech.tactics],
+        "platforms": tech.platforms,
+        "data_sources": tech.data_sources,
+        "url": tech.url,
+    }
 
 
 @mcp.tool()

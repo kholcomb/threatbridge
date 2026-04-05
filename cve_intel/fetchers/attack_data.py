@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -131,18 +132,24 @@ class AttackData:
 _CACHED_ATTACK_DATA: "AttackData | None" = None
 
 
-def get_attack_data() -> AttackData:
+def get_attack_data(
+    progress_callback: "Callable[[int, int], None] | None" = None,
+) -> AttackData:
     """Return an AttackData instance, downloading the bundle if needed.
 
     Caches the parsed data at module level so the 80 MB bundle is only
     loaded and parsed once per process.
+
+    Args:
+        progress_callback: Optional ``(bytes_written, total_bytes)`` callable
+            called during download for progress reporting.
     """
     global _CACHED_ATTACK_DATA
     if _CACHED_ATTACK_DATA is not None:
         return _CACHED_ATTACK_DATA
     bundle_path = _resolve_bundle_path()
     if not bundle_path.exists():
-        _download_bundle(bundle_path)
+        _download_bundle(bundle_path, progress_callback=progress_callback)
     _CACHED_ATTACK_DATA = AttackData(bundle_path)
     return _CACHED_ATTACK_DATA
 
@@ -155,7 +162,10 @@ def _resolve_bundle_path() -> Path:
     return cache_dir / "enterprise-attack.json"
 
 
-def _download_bundle(dest: Path) -> None:
+def _download_bundle(
+    dest: Path,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> None:
     logger.info("Downloading MITRE ATT&CK STIX bundle to %s (~80 MB)...", dest)
     try:
         resp = requests.get(ENTERPRISE_ATTACK_URL, timeout=120, stream=True)
@@ -163,11 +173,16 @@ def _download_bundle(dest: Path) -> None:
     except requests.RequestException as exc:
         raise AttackDataError(f"Failed to download ATT&CK bundle: {exc}") from exc
 
+    total = int(resp.headers.get("content-length", 0))
     dest.parent.mkdir(parents=True, exist_ok=True)
+    bytes_written = 0
     try:
         with dest.open("wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
+                bytes_written += len(chunk)
+                if progress_callback is not None:
+                    progress_callback(bytes_written, total)
     except Exception:
         dest.unlink(missing_ok=True)
         raise
