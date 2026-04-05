@@ -41,6 +41,8 @@ class NVDFetcher:
     # (6.0s / 0.6s) so we never approach the limit regardless of concurrency.
     _rate_lock: threading.Lock = threading.Lock()
     _last_request_time: float = 0.0
+    _session: "requests.Session | None" = None
+    _session_lock: threading.Lock = threading.Lock()
 
     @classmethod
     def _min_interval(cls) -> float:
@@ -55,10 +57,17 @@ class NVDFetcher:
                 time.sleep(wait)
             cls._last_request_time = time.monotonic()
 
+    @classmethod
+    def _get_session(cls) -> "requests.Session":
+        if cls._session is None:
+            with cls._session_lock:
+                if cls._session is None:
+                    cls._session = requests.Session()
+                    cls._session.headers.update({"User-Agent": "cve-intel/0.1.0"})
+        return cls._session
+
     def __init__(self) -> None:
         self._cache = diskcache.Cache(str(settings.cache_dir / "nvd"))
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "cve-intel/0.1.0"})
 
     def validate_cve_id(self, cve_id: str) -> str:
         cve_id = cve_id.strip().upper()
@@ -88,7 +97,7 @@ class NVDFetcher:
             headers["apiKey"] = settings.nvd_api_key
 
         try:
-            resp = self._session.get(NVD_BASE_URL, params=params, headers=headers, timeout=30)
+            resp = self._get_session().get(NVD_BASE_URL, params=params, headers=headers, timeout=30)
         except requests.RequestException as exc:
             raise NVDError(f"Network error fetching {cve_id}: {exc}") from exc
 

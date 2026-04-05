@@ -614,15 +614,36 @@ def cache() -> None:
 
 @cache.command("clear")
 def cache_clear() -> None:
-    """Clear the NVD response cache."""
+    """Clear all caches (NVD responses, Vulnrichment, and ATT&CK bundle)."""
     import diskcache
+    import shutil
     from cve_intel.config import settings
 
-    cache_path = settings.cache_dir / "nvd"
-    with diskcache.Cache(str(cache_path)) as c:
-        count = len(c)
-        c.clear()
-    console.print(f"[green]Cleared {count} cached NVD entries.[/green]")
+    # NVD
+    nvd_path = settings.cache_dir / "nvd"
+    nvd_count = 0
+    if nvd_path.exists():
+        with diskcache.Cache(str(nvd_path)) as c:
+            nvd_count = len(c)
+            c.clear()
+    console.print(f"[green]Cleared {nvd_count} NVD entries.[/green]")
+
+    # Vulnrichment
+    vuln_path = settings.cache_dir / "vulnrichment"
+    vuln_count = 0
+    if vuln_path.exists():
+        with diskcache.Cache(str(vuln_path)) as c:
+            vuln_count = len(c)
+            c.clear()
+    console.print(f"[green]Cleared {vuln_count} Vulnrichment entries.[/green]")
+
+    # ATT&CK bundle
+    attack_path = settings.cache_dir / "attack"
+    if attack_path.exists():
+        shutil.rmtree(attack_path)
+        console.print("[green]Cleared ATT&CK bundle (will re-download on next run).[/green]")
+    else:
+        console.print("[dim]ATT&CK bundle not cached — nothing to clear.[/dim]")
 
 
 @cache.command("stats")
