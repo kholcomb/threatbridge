@@ -238,3 +238,164 @@ def test_compare_sigma_rule_no_community(mocker):
     result = compare_sigma_rule_with_community("CVE-2099-99999", "title: Test\n", ctx)
 
     assert result["community_available"] is False
+
+
+# ---------------------------------------------------------------------------
+# Authentication logic: _build_attack_requirements
+# ---------------------------------------------------------------------------
+
+def test_build_attack_requirements_no_auth_when_privileges_none():
+    from cve_intel.models.cve import CVSSData, CVSSSeverity
+    from cve_intel.mcp_server import _build_attack_requirements
+    cvss = CVSSData(
+        version="3.1",
+        vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        base_score=9.8,
+        base_severity=CVSSSeverity.CRITICAL,
+        attack_vector="NETWORK",
+        attack_complexity="LOW",
+        privileges_required="NONE",
+        user_interaction="NONE",
+        scope="UNCHANGED",
+    )
+    result = _build_attack_requirements(cvss)
+    assert result["authentication_required"] is False
+    assert result["high_privileges_required"] is False
+
+
+def test_build_attack_requirements_auth_required_when_privileges_low():
+    from cve_intel.models.cve import CVSSData, CVSSSeverity
+    from cve_intel.mcp_server import _build_attack_requirements
+    cvss = CVSSData(
+        version="3.1",
+        vector_string="CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+        base_score=8.8,
+        base_severity=CVSSSeverity.HIGH,
+        attack_vector="NETWORK",
+        attack_complexity="LOW",
+        privileges_required="LOW",
+        user_interaction="NONE",
+        scope="UNCHANGED",
+    )
+    result = _build_attack_requirements(cvss)
+    assert result["authentication_required"] is True
+    assert result["high_privileges_required"] is False
+
+
+def test_build_attack_requirements_auth_required_when_privileges_high():
+    from cve_intel.models.cve import CVSSData, CVSSSeverity
+    from cve_intel.mcp_server import _build_attack_requirements
+    cvss = CVSSData(
+        version="3.1",
+        vector_string="CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+        base_score=7.2,
+        base_severity=CVSSSeverity.HIGH,
+        attack_vector="NETWORK",
+        attack_complexity="LOW",
+        privileges_required="HIGH",
+        user_interaction="NONE",
+        scope="UNCHANGED",
+    )
+    result = _build_attack_requirements(cvss)
+    assert result["authentication_required"] is True
+    assert result["high_privileges_required"] is True
+
+
+# ---------------------------------------------------------------------------
+# ATT&CK startup failure → tools return error dict
+# ---------------------------------------------------------------------------
+
+def test_get_attack_techniques_returns_error_when_attack_data_none(mocker, sample_cve_record):
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import get_attack_techniques
+    result = get_attack_techniques("CVE-2024-21762", ctx)
+
+    assert "error" in result
+
+
+def test_triage_cve_returns_error_when_attack_data_none(mocker):
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("CVE-2024-21762", ctx)
+
+    assert "error" in result
+
+
+def test_batch_triage_cves_returns_error_when_attack_data_none(mocker):
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2024-21762"], ctx)
+
+    assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Invalid CVE ID validation at tool boundary
+# ---------------------------------------------------------------------------
+
+def test_fetch_cve_invalid_id_returns_error(mocker):
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import fetch_cve
+    result = fetch_cve("not-a-cve-id", ctx)
+
+    assert "error" in result
+
+
+def test_triage_cve_empty_id_returns_error(mocker, mock_attack_data):
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("", ctx)
+
+    assert "error" in result
+
+
+def test_batch_triage_cves_mixed_ids(mocker, mock_attack_data, sample_cve_record):
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=__import__(
+        "cve_intel.fetchers.vulnrichment", fromlist=["VulnrichmentData"]
+    ).VulnrichmentData(cve_id="CVE-2024-1234"))
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2024-1234", "bad-id"], ctx)
+
+    assert "failed" in result
+    failed_ids = [f["cve_id"] for f in result["failed"]]
+    assert "bad-id" in failed_ids
+    bad_entry = next(f for f in result["failed"] if f["cve_id"] == "bad-id")
+    assert bad_entry["error_type"] == "invalid_id"
+
+
+# ---------------------------------------------------------------------------
+# Batch triage error type distinction
+# ---------------------------------------------------------------------------
+
+def test_batch_triage_not_found_error_type(mocker, mock_attack_data):
+    from cve_intel.fetchers.nvd import NVDNotFoundError
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", side_effect=NVDNotFoundError("not found"))
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2099-99999"], ctx)
+
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["error_type"] == "not_found"
+
+
+def test_batch_triage_rate_limited_error_type(mocker, mock_attack_data):
+    from cve_intel.fetchers.nvd import NVDRateLimitError
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", side_effect=NVDRateLimitError("rate limited"))
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2024-1234"], ctx)
+
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["error_type"] == "rate_limited"

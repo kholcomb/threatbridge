@@ -119,3 +119,20 @@ def test_cve_url_bucket_calculation():
     assert "21xxx" in _cve_url("CVE-2024-21762")
     assert "0xxx" in _cve_url("CVE-2024-0001")
     assert "1xxx" in _cve_url("CVE-2024-1234")
+
+
+def test_fetch_logs_warning_on_non_404_http_error(caplog):
+    """A non-404 HTTP error (e.g. 503) should log a warning and return available=False."""
+    import logging
+    import urllib.error
+
+    http_503 = urllib.error.HTTPError(
+        url="https://example.com", code=503, msg="Service Unavailable", hdrs={}, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=http_503):
+        with caplog.at_level(logging.WARNING, logger="cve_intel.fetchers.vulnrichment"):
+            result = fetch_vulnrichment("CVE-2024-21762")
+
+    assert result.available is False
+    assert any("503" in record.message or "Vulnrichment fetch failed" in record.message
+               for record in caplog.records)

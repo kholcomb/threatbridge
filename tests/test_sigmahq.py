@@ -137,3 +137,20 @@ def test_compare_detects_missing_tags():
     c = comparison["comparisons"][0]
     assert "attack.t1059" in c["missing_attack_tags"]
     assert c["level_match"] is True
+
+
+def test_fetch_logs_warning_on_non_404_http_error(caplog):
+    """A non-404 HTTP error on the directory listing (e.g. 503) should log a warning and return found=False."""
+    import logging
+    import urllib.error
+
+    http_503 = urllib.error.HTTPError(
+        url="https://api.github.com", code=503, msg="Service Unavailable", hdrs={}, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=http_503):
+        with caplog.at_level(logging.WARNING, logger="cve_intel.fetchers.sigmahq"):
+            result = fetch_community_rules("CVE-2024-3400")
+
+    assert result.found is False
+    assert any("SigmaHQ directory listing failed" in record.message
+               for record in caplog.records)
