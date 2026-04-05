@@ -6,9 +6,11 @@ reasoning layer, interpreting the structured data returned by these tools.
 The ATT&CK STIX bundle (~80MB) is loaded once at server startup via the
 lifespan context and shared across all tool calls.
 """
+from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -102,7 +104,7 @@ _PYPI_VENDORS = {"python-", "pypa", "pallets", "psf", "python_"}
 _NPM_VENDORS = {"npm", "npmjs", "nodejs", "node.js"}
 
 
-def _parse_cpe_to_package(cpe_matches: list[CPEMatch]) -> list[dict]:
+def _parse_cpe_to_package(cpe_matches: list[CPEMatch]) -> list[dict[str, Any]]:
     """Convert CPE match entries into structured package references.
 
     CPE format: cpe:2.3:{part}:{vendor}:{product}:{version}:...
@@ -114,7 +116,7 @@ def _parse_cpe_to_package(cpe_matches: list[CPEMatch]) -> list[dict]:
     """
     # Ordered dict keyed by "vendor:product" — preserves insertion order and
     # allows in-place mutation for range merging.
-    index: dict[str, dict] = {}
+    index: dict[str, dict[str, Any]] = {}
 
     for cpe in cpe_matches:
         if not cpe.vulnerable:
@@ -186,7 +188,7 @@ def _compute_priority_tier(vuln: VulnrichmentData, cvss: CVSSData | None) -> str
     return "LOW"
 
 
-def _build_attack_requirements(cvss: CVSSData | None) -> dict:
+def _build_attack_requirements(cvss: CVSSData | None) -> dict[str, Any]:
     """Structured representation of what an attacker needs to exploit this CVE."""
     if not cvss:
         return {"unknown": True}
@@ -202,7 +204,7 @@ def _build_attack_requirements(cvss: CVSSData | None) -> dict:
     }
 
 
-def _build_impact_scope(cvss: CVSSData | None) -> dict:
+def _build_impact_scope(cvss: CVSSData | None) -> dict[str, Any]:
     """Structured representation of what an attacker can achieve on success."""
     if not cvss:
         return {"unknown": True}
@@ -219,7 +221,7 @@ def _build_impact_scope(cvss: CVSSData | None) -> dict:
 def _build_triage_notes(
     vuln: VulnrichmentData,
     cvss: CVSSData | None,
-    techniques: list[dict],
+    techniques: list[dict[str, Any]],
 ) -> list[str]:
     """Agent-readable notes explaining why this CVE has its priority tier."""
     notes = []
@@ -270,7 +272,7 @@ def _build_triage_notes(
     return notes
 
 
-def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict:
+def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict[str, Any]:
     """Core triage logic shared by triage_cve and batch_triage_cves."""
     record = NVDFetcher().fetch(cve_id)
     vuln = fetch_vulnrichment(cve_id)
@@ -320,7 +322,7 @@ def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def fetch_cve(cve_id: str, ctx: Context) -> dict:
+def fetch_cve(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Fetch a CVE record from the NVD (National Vulnerability Database).
 
     Returns the full CVE record including English description, CVSS score and
@@ -335,7 +337,7 @@ def fetch_cve(cve_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def get_attack_techniques(cve_id: str, ctx: Context) -> dict:
+def get_attack_techniques(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Map a CVE to MITRE ATT&CK techniques using CWE weakness types and CVSS heuristics.
 
     Returns an AttackMapping with technique IDs, names, associated tactics,
@@ -371,7 +373,7 @@ def get_attack_techniques(cve_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def lookup_technique(technique_id: str, ctx: Context) -> dict:
+def lookup_technique(technique_id: str, ctx: Context) -> dict[str, Any]:
     """Look up a specific MITRE ATT&CK technique by ID.
 
     Returns the full technique record: description, associated tactics,
@@ -393,7 +395,7 @@ def lookup_technique(technique_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def search_techniques(query: str, ctx: Context) -> list[dict]:
+def search_techniques(query: str, ctx: Context) -> list[dict[str, Any]]:
     """Search MITRE ATT&CK techniques by name or keyword.
 
     Returns up to 10 matching techniques with their IDs, names, descriptions,
@@ -421,7 +423,7 @@ def search_techniques(query: str, ctx: Context) -> list[dict]:
 
 
 @mcp.tool()
-def get_cve_summary(cve_id: str, ctx: Context) -> dict:
+def get_cve_summary(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Fetch CVE details and ATT&CK technique mapping in a single call.
 
     Returns a combined dict with:
@@ -455,7 +457,7 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def get_exploitation_context(cve_id: str, ctx: Context) -> dict:
+def get_exploitation_context(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Fetch CISA Vulnrichment exploitation context for a CVE.
 
     Returns KEV (Known Exploited Vulnerabilities) status and SSVC scores:
@@ -484,7 +486,7 @@ def get_exploitation_context(cve_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def triage_cve(cve_id: str, ctx: Context) -> dict:
+def triage_cve(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Triage a CVE from a dependency scanner finding.
 
     Returns a structured priority assessment combining all available signals:
@@ -517,7 +519,7 @@ def triage_cve(cve_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool()
-def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict:
+def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict[str, Any]:
     """Triage multiple CVEs from scanner output in a single call.
 
     Accepts a list of CVE IDs (e.g. from Snyk, Trivy, Grype, Dependabot output)
@@ -572,7 +574,7 @@ def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict:
 
 
 @mcp.tool()
-def get_community_sigma_rules(cve_id: str, ctx: Context) -> dict:
+def get_community_sigma_rules(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Fetch community Sigma rules for a CVE from the SigmaHQ/sigma repository.
 
     Returns rules from rules-emerging-threats/{YEAR}/Exploits/{CVE_ID}/ if they exist.
@@ -593,7 +595,7 @@ def get_community_sigma_rules(cve_id: str, ctx: Context) -> dict:
 @mcp.tool()
 def compare_sigma_rule_with_community(
     cve_id: str, generated_rule_text: str, ctx: Context
-) -> dict:
+) -> dict[str, Any]:
     """Compare a generated Sigma rule against SigmaHQ community rules.
 
     Fetches community rules for the CVE and returns a structured comparison:
