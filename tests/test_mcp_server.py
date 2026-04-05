@@ -399,3 +399,107 @@ def test_batch_triage_rate_limited_error_type(mocker, mock_attack_data):
 
     assert len(result["failed"]) == 1
     assert result["failed"][0]["error_type"] == "rate_limited"
+
+
+# ---------------------------------------------------------------------------
+# Group 1: Return type contract tests
+# ---------------------------------------------------------------------------
+
+def test_triage_cve_returns_dict(mocker, sample_cve_record, mock_attack_data):
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=__import__(
+        "cve_intel.fetchers.vulnrichment", fromlist=["VulnrichmentData"]
+    ).VulnrichmentData(cve_id="CVE-2024-21762"))
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("CVE-2024-21762", ctx)
+
+    assert isinstance(result, dict)
+    assert "priority_tier" in result
+    assert "techniques" in result
+
+
+# ---------------------------------------------------------------------------
+# Group 2: attack_data=None graceful error tests
+# ---------------------------------------------------------------------------
+
+def test_get_cve_summary_returns_error_when_attack_data_none(mocker, sample_cve_record):
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import get_cve_summary
+    result = get_cve_summary("CVE-2024-21762", ctx)
+
+    assert isinstance(result, dict)
+    assert "error" in result
+
+
+def test_lookup_technique_returns_error_when_attack_data_none():
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import lookup_technique
+    result = lookup_technique("T1190", ctx)
+
+    assert isinstance(result, dict)
+    assert "error" in result
+
+
+def test_search_techniques_returns_error_when_attack_data_none():
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import search_techniques
+    result = search_techniques("exploit", ctx)
+
+    assert isinstance(result, dict)
+    assert "error" in result
+
+
+def test_compare_sigma_rule_with_community_returns_error_when_attack_data_none(mocker):
+    from cve_intel.fetchers.sigmahq import SigmaHQResult
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_community_rules",
+        return_value=SigmaHQResult(cve_id="CVE-2024-21762", found=False),
+    )
+    ctx = _make_ctx(None)
+
+    from cve_intel.mcp_server import compare_sigma_rule_with_community
+    result = compare_sigma_rule_with_community("CVE-2024-21762", "title: Test\n", ctx)
+
+    assert isinstance(result, dict)
+    # compare_sigma_rule_with_community does not use attack_data, so it should
+    # succeed (community_available=false) rather than return an error dict
+    assert "community_available" in result
+
+
+# ---------------------------------------------------------------------------
+# Group 3: Tool interaction — triage_cve and lookup_technique use same ATT&CK data
+# ---------------------------------------------------------------------------
+
+def test_triage_then_lookup_technique_consistent(mocker, sample_cve_record, mock_attack_data):
+    """triage_cve top technique ID resolves correctly via lookup_technique."""
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=__import__(
+        "cve_intel.fetchers.vulnrichment", fromlist=["VulnrichmentData"]
+    ).VulnrichmentData(cve_id="CVE-2024-21762"))
+    mock_attack_data.all_technique_ids = ["T1190", "T1068", "T1203"]
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve, lookup_technique
+
+    triage_result = triage_cve("CVE-2024-21762", ctx)
+    assert isinstance(triage_result, dict)
+    assert "techniques" in triage_result
+
+    techniques = triage_result["techniques"]
+    if not techniques:
+        pytest.skip("No techniques mapped for this CVE fixture — skip interaction test")
+
+    top_technique_id = techniques[0]["technique_id"]
+    top_technique_name = techniques[0]["name"]
+
+    lookup_result = lookup_technique(top_technique_id, ctx)
+    assert isinstance(lookup_result, dict)
+    assert lookup_result["technique_id"] == top_technique_id
+    assert lookup_result["name"] == top_technique_name
