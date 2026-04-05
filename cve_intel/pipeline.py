@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from cve_intel import __version__
 from cve_intel.enrichment.attack_enricher import AttackEnricher
@@ -96,8 +99,8 @@ def analyze(
 
         except ClaudeError as exc:
             # Degrade gracefully
-            print(f"[warning] Claude enrichment unavailable: {exc}")
-            print("[warning] Continuing with deterministic results only.")
+            logger.warning("Claude enrichment unavailable: %s", exc)
+            logger.warning("Continuing with deterministic results only.")
             ioc_bundle = IOCBundle(cve_id=cve_id)
             rule_bundle = RuleBundle(cve_id=cve_id)
     else:

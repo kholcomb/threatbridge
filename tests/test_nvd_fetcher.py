@@ -99,3 +99,32 @@ def test_fetch_403_raises_rate_limit(tmp_path, monkeypatch):
 
     with pytest.raises(NVDRateLimitError):
         fetcher.fetch("CVE-2024-21762")
+
+
+def test_malformed_cvss_severity_logs_warning(caplog):
+    """_build_cvss should log a warning when baseSeverity is unrecognized."""
+    fetcher = NVDFetcher.__new__(NVDFetcher)
+
+    raw_metrics = {
+        "cvssMetricV31": [
+            {
+                "cvssData": {
+                    "version": "3.1",
+                    "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                    "baseScore": 9.8,
+                    "baseSeverity": "ULTRA",
+                }
+            }
+        ]
+    }
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="cve_intel.fetchers.nvd"):
+        cvss_list = fetcher._parse_cvss(raw_metrics)
+
+    assert len(cvss_list) == 1
+    assert cvss_list[0].base_severity.value == "MEDIUM"
+    assert any(
+        "ULTRA" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    )
