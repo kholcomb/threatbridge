@@ -1,5 +1,17 @@
+import os
 from pathlib import Path
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _default_cache_dir() -> Path:
+    # XDG on Linux, ~/Library/Caches on macOS, %LOCALAPPDATA% on Windows
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return base / "cve-intel"
 
 
 class Settings(BaseSettings):
@@ -8,10 +20,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     nvd_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
-    cache_dir: Path = Path("./cache")
+    cache_dir: Path = _default_cache_dir()
     cache_ttl_seconds: int = 86400
     attack_bundle_path: Path | None = None
     max_tokens: int = 4096
+
+    @field_validator("cache_ttl_seconds")
+    @classmethod
+    def cache_ttl_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("cache_ttl_seconds must be positive")
+        return v
 
     @property
     def has_anthropic_key(self) -> bool:
