@@ -7,9 +7,11 @@ The ATT&CK STIX bundle (~80MB) is loaded once at server startup via the
 lifespan context and shared across all tool calls.
 """
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP, Context
 
@@ -36,7 +38,57 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     yield {"attack_data": attack_data}
 
 
-mcp = FastMCP("cve-intel", lifespan=lifespan)
+_INSTRUCTIONS = """\
+CVE threat intelligence server. All tools are deterministic — no AI calls inside
+the server. You (the agent) provide the reasoning layer on top of the structured
+data these tools return.
+
+## Tool groups
+
+- **Raw data**: fetch_cve, get_exploitation_context
+- **ATT&CK mapping**: get_attack_techniques, get_cve_summary, lookup_technique, search_techniques
+- **Triage**: triage_cve, batch_triage_cves
+- **Detection**: get_community_sigma_rules, compare_sigma_rule_with_community
+
+## Primary workflows
+
+**1. Scanner triage** (e.g. Snyk / Trivy / Grype output)
+   batch_triage_cves → get_exploitation_context for each CRITICAL/HIGH →
+   cross-reference attack_requirements against deployment architecture → recommend patches
+
+**2. Single CVE investigation**
+   triage_cve → get_exploitation_context → lookup_technique per mapped technique →
+   get_community_sigma_rules → synthesise risk narrative
+
+**3. Detection coverage assessment**
+   get_attack_techniques → get_community_sigma_rules →
+   lookup_technique (data_sources + detection_notes per technique) → identify gaps
+
+## Interpreting results
+
+Priority tiers:
+  CRITICAL = KEV-listed or SSVC exploitation=active (patch now)
+  HIGH     = PoC exists, CVSS ≥ 9.0, or unauthenticated network vector ≥ 7.0
+  MEDIUM   = CVSS ≥ 7.0 or total technical impact
+  LOW      = everything else
+
+ATT&CK tactic context (use to qualify risk against deployment):
+  Initial Access (TA0001)      → only relevant if the service is internet-exposed
+  Lateral Movement (TA0008)   → only relevant if an attacker is already inside the network
+  Privilege Escalation (TA0004) → only relevant if attacker already has some access
+  Impact (TA0040)              → describes what happens after successful exploitation
+
+attack_requirements fields:
+  network_access_required=true  → irrelevant if the service is not externally reachable
+  authentication_required=true  → attacker needs valid credentials first
+  user_interaction_required=true → social engineering or phishing required
+
+Use the `investigate_cve` prompt for a guided single-CVE workflow.
+Use the `triage_scanner_output` prompt for batch scanner triage.
+Use the `assess_detection_coverage` prompt for detection engineering.
+"""
+
+mcp = FastMCP("cve-intel", lifespan=lifespan, instructions=_INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +606,376 @@ def compare_sigma_rule_with_community(
     """
     community = fetch_community_rules(cve_id)
     return compare_with_community(generated_rule_text, community)
+
+
+# ---------------------------------------------------------------------------
+# MCP Resources — reference data and workflow documentation
+# ---------------------------------------------------------------------------
+
+@mcp.resource("ref://workflows")
+def workflow_guide() -> str:
+    """Detailed workflow guide for using the cve-intel tools effectively."""
+    return """\
+# CVE-Intel Workflow Guide
+
+## Workflow 1: Scanner Triage
+
+Use when you have a list of CVE IDs from a dependency scanner (Snyk, Trivy,
+Grype, Dependabot) and need to prioritise remediation.
+
+Steps:
+1. Call `batch_triage_cves(cve_ids=[...])` with the full list.
+   - Results are pre-sorted CRITICAL → HIGH → MEDIUM → LOW.
+   - Check `summary` for a count breakdown.
+   - Check `failed` for any CVEs that could not be looked up (rate limit,
+     not found, invalid ID) and handle them separately.
+
+2. For every CRITICAL or HIGH result, call `get_exploitation_context(cve_id)`
+   to confirm KEV status and SSVC scores. This is your strongest signal for
+   "patch tonight vs patch this sprint".
+
+3. For each result, read `attack_requirements` and cross-reference against the
+   deployment:
+   - `network_access_required=true` → is this service exposed to the internet
+     or an untrusted network? If not, downgrade urgency.
+   - `authentication_required=true` → does an attacker need valid credentials?
+     Significantly raises the bar.
+   - `user_interaction_required=true` → requires phishing or social engineering.
+
+4. Read `triage_notes` — these are pre-computed plain-language observations
+   about the CVE's risk posture (e.g. "Unauthenticated network exploit",
+   "ATT&CK: Lateral Movement tactic — applicable post-compromise").
+
+5. Summarise findings: group by priority tier, call out any CVEs where
+   deployment architecture reduces the effective risk, and produce a
+   prioritised patch list.
+
+---
+
+## Workflow 2: Single CVE Investigation
+
+Use when you need a full risk assessment for one CVE (e.g. a reported
+vulnerability in a critical dependency).
+
+Steps:
+1. Call `triage_cve(cve_id)` for the complete structured assessment including
+   priority tier, exploitation signals, attack requirements, and ATT&CK mapping.
+
+2. Call `get_exploitation_context(cve_id)` for CISA Vulnrichment detail.
+   Even if `triage_cve` already includes this data, check `kev_date_added`
+   to understand how long it has been actively exploited.
+
+3. For each technique in the `techniques` list, call `lookup_technique(id)` to
+   get the full description, targeted platforms, data sources, and detection
+   notes. Use `tactics` to understand attacker stage and architecture fit.
+
+4. Call `get_community_sigma_rules(cve_id)` to check whether the security
+   community has already published detection rules. If `found=true`, the
+   `logsources` and `attack_tags` tell you what log sources are considered
+   authoritative.
+
+5. Synthesise: combine priority tier + exploitation evidence + architecture
+   fit assessment + detection availability into a risk narrative with
+   recommended actions (patch urgency, detection deployment, workarounds).
+
+---
+
+## Workflow 3: Detection Coverage Assessment
+
+Use when you want to understand how well a CVE (or its mapped techniques)
+can be detected in your environment.
+
+Steps:
+1. Call `get_attack_techniques(cve_id)` to get the deterministic technique
+   mapping. Check `mapping_method` — "cwe_static+cvss_heuristic" means both
+   CWE-based (higher confidence) and CVSS-based (lower confidence) signals
+   were used.
+
+2. Call `get_community_sigma_rules(cve_id)`.
+   - `found=true` with rules: review `logsources` to confirm you have those
+     log sources in your SIEM. Review `attack_tags` to confirm alignment.
+   - `found=false`: no community baseline exists; you are starting from scratch.
+
+3. For each mapped technique, call `lookup_technique(id)`:
+   - `data_sources` tells you what telemetry is needed to detect this technique.
+   - `detection_notes` provides MITRE's recommended detection approach.
+   - `platforms` tells you which OSes/environments are in scope.
+
+4. If you have a generated Sigma rule, call
+   `compare_sigma_rule_with_community(cve_id, rule_text)` to check:
+   - Whether your logsource matches community consensus.
+   - Whether your ATT&CK tags are complete.
+   - Whether your severity level is aligned.
+
+5. Report gaps: techniques with no community rules, log sources you do not
+   collect, and ATT&CK tags missing from your rule.
+
+---
+
+## ATT&CK Tactic Quick Reference
+
+| Tactic              | ID     | Deployment Relevance                              |
+|---------------------|--------|---------------------------------------------------|
+| Initial Access      | TA0001 | Only if service is internet-exposed               |
+| Execution           | TA0002 | Post-initial-access code execution                |
+| Persistence         | TA0003 | Attacker maintaining access after compromise      |
+| Privilege Escalation| TA0004 | Attacker already has low-privilege access         |
+| Defense Evasion     | TA0005 | Attacker avoiding detection post-compromise       |
+| Credential Access   | TA0006 | Stealing credentials from the system              |
+| Discovery           | TA0007 | Attacker mapping the environment post-compromise  |
+| Lateral Movement    | TA0008 | Only if attacker is already inside the network    |
+| Collection          | TA0009 | Data gathering prior to exfiltration              |
+| Command and Control | TA0011 | Attacker communicating with compromised system    |
+| Exfiltration        | TA0010 | Data leaving the environment                      |
+| Impact              | TA0040 | Ransomware, destruction, DoS — end-game actions   |
+"""
+
+
+@mcp.resource("ref://tactic-guide")
+def tactic_guide() -> str:
+    """ATT&CK tactic definitions and their deployment architecture relevance."""
+    return """\
+# ATT&CK Tactic Guide — Deployment Architecture Relevance
+
+Use this reference when interpreting `techniques` output from triage_cve or
+get_attack_techniques to decide whether a CVE is relevant to a specific deployment.
+
+## Initial Access (TA0001)
+Techniques: Exploit Public-Facing Application (T1190), Drive-by Compromise (T1189),
+Phishing (T1566), External Remote Services (T1133)
+
+Relevant when: The vulnerable service or application is reachable from an untrusted
+network (internet, partner network, or guest VLAN).
+Not relevant when: The service is internal-only with no external exposure.
+Key question: "Can an unauthenticated external actor reach this service?"
+
+## Execution (TA0002)
+Techniques: Command and Scripting Interpreter (T1059), Exploitation for Client
+Execution (T1203), User Execution (T1204)
+
+Relevant when: An attacker has already gained some access and is running code.
+Context: Usually follows Initial Access. Indicates the vulnerability allows
+arbitrary code execution on the target.
+
+## Privilege Escalation (TA0004)
+Techniques: Exploitation for Privilege Escalation (T1068), Valid Accounts (T1078),
+Sudo and Sudo Caching (T1548.003)
+
+Relevant when: An attacker already has low-privilege access and can escalate to root
+or SYSTEM. Only relevant if Initial Access is already assumed.
+Key question: "Does an attacker already have a foothold in this environment?"
+
+## Lateral Movement (TA0008)
+Techniques: Exploitation of Remote Services (T1210), Remote Services (T1021),
+Pass the Hash (T1550.002)
+
+Relevant when: The environment has an attacker already present (post-breach),
+and the vulnerable service is reachable from inside the network.
+Not relevant when: No breach has occurred and external exposure is the primary concern.
+Key question: "Is this on an internal network segment accessible post-compromise?"
+
+## Impact (TA0040)
+Techniques: Data Encrypted for Impact (T1486 — ransomware), Service Stop (T1489),
+Defacement (T1491), DoS (T1499)
+
+Context: Describes what an attacker achieves after successful exploitation. Use this
+to understand blast radius, not to qualify whether the attack is possible.
+
+## Credential Access (TA0006)
+Techniques: Brute Force (T1110), OS Credential Dumping (T1003), Unsecured
+Credentials (T1552)
+
+Relevant when: The vulnerability exposes credentials directly, or an attacker
+already present can use the exploit to harvest credentials for further access.
+"""
+
+
+@mcp.resource("ref://cwe-attack-map")
+def cwe_attack_map() -> str:
+    """The static CWE-to-ATT&CK technique mapping used by get_attack_techniques."""
+    map_path = Path(__file__).parent.parent / "data" / "cwe_attack_map.json"
+    try:
+        data = json.loads(map_path.read_text(encoding="utf-8"))
+        return json.dumps(data, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": f"Could not load CWE map: {exc}"})
+
+
+# ---------------------------------------------------------------------------
+# MCP Prompts — guided workflow templates
+# ---------------------------------------------------------------------------
+
+@mcp.prompt()
+def triage_scanner_output(cve_ids: str) -> str:
+    """Guided workflow for triaging CVE IDs from scanner output.
+
+    Args:
+        cve_ids: Comma-separated CVE IDs from scanner output
+                 (e.g. "CVE-2024-21762, CVE-2023-44487, CVE-2021-44228")
+    """
+    id_list = [c.strip() for c in cve_ids.split(",") if c.strip()]
+    formatted = json.dumps(id_list)
+    return f"""\
+You are triaging CVEs from scanner output. Follow these steps in order:
+
+**CVEs to triage:** {formatted}
+
+## Step 1 — Batch triage
+Call `batch_triage_cves` with the list above. Note the `summary` counts and
+review `failed` entries — handle rate-limited ones by retrying individually
+with `triage_cve`.
+
+## Step 2 — Deepen CRITICAL and HIGH findings
+For every CVE in the results with `priority_tier` of CRITICAL or HIGH:
+- Call `get_exploitation_context(cve_id)` to confirm KEV status and SSVC scores.
+- Note `kev_date_added` if present — this tells you how long it has been
+  actively exploited in the wild.
+
+## Step 3 — Apply deployment context
+For each result, read `attack_requirements`:
+- If `network_access_required=true`: is this service reachable from the internet
+  or an untrusted network? If not, reduce urgency.
+- If `authentication_required=true`: an attacker needs valid credentials first —
+  note this as a mitigating factor.
+- If `user_interaction_required=true`: social engineering is required — note this.
+
+Read `triage_notes` for pre-computed risk observations.
+
+Check `techniques[].tactics` for ATT&CK context:
+- "initial-access" → only matters if the service is externally exposed.
+- "lateral-movement" → only matters if an attacker is already inside the network.
+
+## Step 4 — Summarise
+Produce a prioritised remediation list grouped by tier:
+- CRITICAL: patch within 24 hours
+- HIGH: patch within the current sprint
+- MEDIUM: schedule for next release cycle
+- LOW: monitor and patch on regular cadence
+
+For each CVE include: priority tier, brief description of the risk, any
+deployment-specific factors that raise or lower urgency, and whether active
+exploitation is confirmed.
+"""
+
+
+@mcp.prompt()
+def investigate_cve(cve_id: str, deployment_context: str = "") -> str:
+    """Guided workflow for a full single-CVE investigation.
+
+    Args:
+        cve_id: The CVE ID to investigate (e.g. CVE-2024-21762)
+        deployment_context: Optional description of your deployment
+                            (e.g. "internet-facing Nginx, internal Postgres,
+                            no direct user access to the app server")
+    """
+    context_section = (
+        f"\n**Deployment context provided:** {deployment_context}\n"
+        if deployment_context
+        else "\n**No deployment context provided** — note where assumptions are made.\n"
+    )
+    return f"""\
+You are performing a full investigation of **{cve_id}**.
+{context_section}
+Follow these steps in order:
+
+## Step 1 — Full triage assessment
+Call `triage_cve("{cve_id}")`. This gives you priority tier, exploitation
+signals, attack requirements, impact scope, top ATT&CK techniques, and
+triage notes in one call.
+
+## Step 2 — Exploitation evidence
+Call `get_exploitation_context("{cve_id}")`. Confirm:
+- Is this in the CISA KEV catalog? (`in_kev`)
+- What is the SSVC exploitation level? (`ssvc_exploitation`: active/poc/none)
+- Is exploitation automatable at scale? (`ssvc_automatable`)
+- What is the technical impact? (`ssvc_technical_impact`: total/partial)
+
+## Step 3 — ATT&CK technique deep-dive
+For each technique in `triage_cve.techniques`, call `lookup_technique(id)`:
+- Note `tactics` — use this to qualify risk against the deployment context.
+- Note `platforms` — confirm the vulnerable platforms are in use.
+- Note `detection_notes` and `data_sources` — record what telemetry is needed
+  to detect exploitation attempts.
+
+## Step 4 — Detection coverage
+Call `get_community_sigma_rules("{cve_id}")`:
+- If `found=true`: the community has published detection rules. Note the
+  `logsources` — confirm you collect those log sources.
+- If `found=false`: no community baseline. Use `detection_notes` from Step 3
+  to understand what to build.
+
+## Step 5 — Risk narrative
+Synthesise everything into a structured risk assessment:
+
+1. **What is it?** — One-sentence description of the vulnerability.
+2. **How bad is it?** — Priority tier with justification (CVSS score,
+   exploitation evidence, technical impact).
+3. **Does it apply here?** — Cross-reference attack requirements and ATT&CK
+   tactics against the deployment context. Explicitly state what assumptions
+   you are making if no deployment context was provided.
+4. **What can an attacker achieve?** — Impact scope (confidentiality/
+   integrity/availability, scope change).
+5. **Is it being exploited?** — KEV status, SSVC exploitation level,
+   any `kev_date_added`.
+6. **Can we detect it?** — Community rules available? Log sources required?
+   Gaps in current detection?
+7. **Recommended actions** — Patch urgency, detection rules to deploy,
+   workarounds if a patch is not immediately available.
+"""
+
+
+@mcp.prompt()
+def assess_detection_coverage(cve_id: str) -> str:
+    """Guided workflow for assessing and improving detection coverage for a CVE.
+
+    Args:
+        cve_id: The CVE ID to assess detection coverage for
+    """
+    return f"""\
+You are assessing detection coverage for **{cve_id}**.
+
+## Step 1 — Map attack techniques
+Call `get_attack_techniques("{cve_id}")` to get the deterministic technique
+mapping. Note:
+- `mapping_method`: "cwe_static" means high-confidence CWE-based mapping;
+  "cwe_static+cvss_heuristic" means additional low-confidence CVSS hints.
+- `techniques[].confidence`: 0.6+ = CWE-based (reliable), 0.2–0.5 = CVSS
+  heuristic (treat as hints only).
+
+## Step 2 — Check community baseline
+Call `get_community_sigma_rules("{cve_id}")`:
+- `found=true`: review `filenames`, `logsources`, and `attack_tags`.
+  The community logsource is your strongest signal for where to look.
+- `found=false`: no community baseline — proceed from technique data alone.
+
+## Step 3 — Deep-dive each technique
+For each technique from Step 1, call `lookup_technique(technique_id)` and record:
+- `data_sources`: what telemetry is needed (process creation, network traffic,
+  web logs, etc.)
+- `detection_notes`: MITRE's recommended approach
+- `platforms`: which OSes/environments are relevant
+- `tactics`: attacker stage (shapes which log sources matter)
+
+## Step 4 — Coverage gap analysis
+For each technique, assess:
+- Do you collect the required `data_sources`?
+- Do you have rules covering this technique already?
+- Does the community have a rule? If yes, is it deployed in your SIEM?
+- Is the technique's platform relevant to your environment?
+
+## Step 5 — Report
+Produce a detection coverage report:
+
+| Technique | Tactic | Data Sources Needed | Community Rule? | Gap? |
+|-----------|--------|---------------------|-----------------|------|
+| (fill in from Steps 1–4) |
+
+Then for each gap:
+- Specify the log source needed.
+- Summarise the detection logic from `detection_notes`.
+- Note whether a community Sigma rule exists or needs to be written.
+- Prioritise gaps by technique confidence score (higher = more reliable signal).
+"""
 
 
 def main() -> None:
