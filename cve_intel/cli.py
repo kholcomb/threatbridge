@@ -164,9 +164,14 @@ def analyze(
               help="Output format.")
 @click.option("--output", "-o", type=click.Path(), default=None,
               help="Output directory. Writes one file per CVE (JSON/SARIF).")
-@click.option("--workers", "-w", default=1, show_default=True,
-              type=click.IntRange(1, 3),
-              help="Concurrent workers (max 3; beware Claude rate limits).")
+@click.option("--workers", "-w", default=None, type=click.IntRange(1, 10),
+              help=(
+                  "Concurrent workers. "
+                  "Defaults to 3 with NVD_API_KEY, 1 without. "
+                  "The NVD rate limiter serialises fetches regardless, so more workers "
+                  "overlap enrichment and rule generation for different CVEs. "
+                  "Max 10 with a key, max 3 without."
+              ))
 @click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
               help="Skip Claude enrichment.")
 @click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
@@ -185,7 +190,7 @@ def batch(
     cve_ids_file: str,
     fmt: str,
     output: str | None,
-    workers: int,
+    workers: int | None,
     no_enrich: bool,
     rules: str,
     sarif_policy: str,
@@ -198,6 +203,17 @@ def batch(
     import json as _json
 
     from cve_intel import pipeline
+    from cve_intel.config import settings as _settings
+
+    has_nvd_key = _settings.has_nvd_key
+    if workers is None:
+        workers = 3 if has_nvd_key else 1
+    elif not has_nvd_key and workers > 3:
+        err_console.print(
+            "[yellow]Warning:[/yellow] --workers capped at 3 without NVD_API_KEY "
+            "(set NVD_API_KEY to use up to 10 workers)."
+        )
+        workers = 3
     from cve_intel.output import json_renderer, text_renderer
     from cve_intel.fetchers.attack_data import get_attack_data
     from cve_intel.progress import RichProgress
