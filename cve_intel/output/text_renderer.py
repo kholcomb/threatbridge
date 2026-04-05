@@ -48,6 +48,26 @@ def render_text(result: AnalysisResult) -> None:
         details_table.add_row("CVSS Vector", cvss.vector_string)
     console.print(details_table)
 
+    # Exploitation Context (Vulnrichment)
+    vuln_meta = result.metadata.get("vulnrichment", {})
+    if vuln_meta:
+        exploit_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+        exploit_table.add_column("Field", style="bold")
+        exploit_table.add_column("Value")
+
+        kev_text = Text("YES — Known Exploited Vulnerability", style="bold red") if vuln_meta.get("in_kev") else Text("No", style="dim")
+        exploit_table.add_row("CISA KEV", kev_text)
+        if vuln_meta.get("kev_date_added"):
+            exploit_table.add_row("KEV Added", vuln_meta["kev_date_added"])
+
+        exploitation = vuln_meta.get("ssvc_exploitation", "unknown")
+        exploit_style = "bold red" if exploitation == "active" else "yellow" if exploitation == "poc" else "dim"
+        exploit_table.add_row("SSVC Exploitation", Text(exploitation, style=exploit_style))
+        exploit_table.add_row("SSVC Automatable", vuln_meta.get("ssvc_automatable", "unknown"))
+        exploit_table.add_row("SSVC Impact", vuln_meta.get("ssvc_technical_impact", "unknown"))
+
+        console.print(Panel(exploit_table, title="Exploitation Context", border_style="red"))
+
     # ATT&CK Mapping
     if mapping.techniques:
         atk_table = Table(title="ATT&CK Techniques", box=box.ROUNDED, border_style="yellow")
@@ -99,27 +119,35 @@ def render_text(result: AnalysisResult) -> None:
         console.print(f"\n[bold green]Detection Rules ({len(all_rules)} generated)[/bold green]\n")
 
         for rule in rules.sigma_rules:
-            console.print(Panel(
-                Syntax(rule.rule_text, "yaml", theme="monokai", line_numbers=False),
-                title=f"[yellow]Sigma[/yellow] — {rule.name}",
-                border_style="yellow",
-            ))
+            _render_rule_panel(rule, "Sigma", "yellow", syntax="yaml")
 
         for rule in rules.yara_rules:
-            console.print(Panel(
-                Syntax(rule.rule_text, "c", theme="monokai", line_numbers=False),
-                title=f"[blue]YARA[/blue] — {rule.name}",
-                border_style="blue",
-            ))
+            _render_rule_panel(rule, "YARA", "blue", syntax="c")
 
         for rule in rules.snort_rules:
-            console.print(Panel(
-                Syntax(rule.rule_text, "text", theme="monokai", line_numbers=False),
-                title=f"[red]Snort[/red] — {rule.name}",
-                border_style="red",
-            ))
+            _render_rule_panel(rule, "Snort", "red")
+
+        for rule in rules.suricata_rules:
+            _render_rule_panel(rule, "Suricata", "bright_red")
     else:
         console.print("[dim]No detection rules generated.[/dim]")
 
     enrichment_note = "[green]Claude-enriched[/green]" if result.enriched else "[dim]Deterministic only (--no-enrich)[/dim]"
     console.print(f"\n[dim]Analysis: {enrichment_note}  |  Method: {mapping.mapping_method}[/dim]")
+
+
+def _render_rule_panel(rule, label: str, color: str, syntax: str = "text") -> None:
+    from cve_intel.models.rules import DetectionRule
+    is_warning = rule.description.startswith("[QUALITY WARNING]")
+    border = "yellow" if is_warning else color
+    title_parts = [f"[{color}]{label}[/{color}] — {rule.name}"]
+    title_parts.append(f"  [{rule.severity.upper()}]")
+    if is_warning:
+        title_parts.append("  [yellow]⚠ quality warning[/yellow]")
+    subtitle = rule.description if is_warning else None
+    console.print(Panel(
+        Syntax(rule.rule_text, syntax, theme="monokai", line_numbers=False),
+        title="".join(title_parts),
+        subtitle=subtitle,
+        border_style=border,
+    ))
