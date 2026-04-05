@@ -375,7 +375,12 @@ def iocs(cve_id: str, no_enrich: bool, output: str | None) -> None:
 @click.option("--format", "-f", "fmt",
               type=click.Choice(["text", "json"]),
               default="text", show_default=True,
-              help="Output format.")
+              help=(
+                  "Output format. "
+                  "text: prints rules inline or writes individual rule files "
+                  "(e.g. sigma/*.yml, yara/*.yar) when --output is given. "
+                  "json: emits a single JSON blob containing all rules."
+              ))
 def rules_cmd(cve_id: str, rules: str, output: str | None, no_enrich: bool, fmt: str) -> None:
     """Generate detection rules for a CVE."""
     import json as _json

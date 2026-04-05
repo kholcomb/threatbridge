@@ -71,12 +71,14 @@ data these tools return.
 ## Primary workflows
 
 **1. Scanner triage** (e.g. Snyk / Trivy / Grype output)
-   batch_triage_cves → get_exploitation_context for each CRITICAL/HIGH →
-   cross-reference attack_requirements against deployment architecture → recommend patches
+   batch_triage_cves → cross-reference attack_requirements against deployment architecture →
+   call get_exploitation_context only if you need raw KEV/SSVC fields not in the triage result →
+   recommend patches
 
 **2. Single CVE investigation**
-   triage_cve → get_exploitation_context → lookup_technique per mapped technique →
-   get_related_techniques to expand threat model → get_community_sigma_rules → synthesise risk narrative
+   triage_cve → (exploitation field already contains KEV/SSVC — no need to call get_exploitation_context) →
+   lookup_technique per mapped technique → get_related_techniques to expand threat model →
+   get_community_sigma_rules → synthesise risk narrative
 
 **3. Detection coverage assessment**
    get_attack_techniques → get_community_sigma_rules →
