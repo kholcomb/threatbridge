@@ -451,7 +451,13 @@ def iocs(cve_id: str, output: str | None) -> None:
                   "(e.g. sigma/*.yml, yara/*.yar) when --output is given. "
                   "json: emits a single JSON blob containing all rules."
               ))
-def rules_cmd(cve_id: str, rules: str, output: str | None, fmt: str) -> None:
+@click.option("--compare-community", "compare_community", is_flag=True, default=False,
+              help=(
+                  "Compare generated Sigma rule against SigmaHQ community rules. "
+                  "Requires network access to api.github.com. "
+                  "Set GITHUB_TOKEN to avoid rate limits (60 req/hr unauthenticated)."
+              ))
+def rules_cmd(cve_id: str, rules: str, output: str | None, fmt: str, compare_community: bool) -> None:
     """Generate detection rules for a CVE (requires ANTHROPIC_API_KEY)."""
     import json as _json
     from cve_intel import pipeline
@@ -490,6 +496,80 @@ def rules_cmd(cve_id: str, rules: str, output: str | None, fmt: str) -> None:
         for rule in all_rules:
             console.print(f"\n[bold]--- {rule.rule_format.value.upper()}: {rule.name} ---[/bold]")
             click.echo(rule.rule_text)
+
+    if compare_community:
+        _print_community_comparison(cve_id, result.rule_bundle.sigma_rules)
+
+
+def _print_community_comparison(cve_id: str, sigma_rules: list) -> None:
+    """Fetch SigmaHQ community rules and print a comparison panel."""
+    import os
+    from cve_intel.fetchers.sigmahq import fetch_community_rules, compare_with_community
+    from rich.table import Table
+
+    # Pass GITHUB_TOKEN if available to raise the rate limit
+    token = os.environ.get("GITHUB_TOKEN", "")
+    community = fetch_community_rules(cve_id, github_token=token)
+
+    if not community.found:
+        err_console.print(
+            f"[dim]No community Sigma rules found for {cve_id} in SigmaHQ/sigma.[/dim]"
+        )
+        return
+
+    console.print(
+        f"\n[bold cyan]Community Sigma comparison ({len(community.rules)} rule(s) found)[/bold cyan]"
+    )
+
+    for sigma_rule in sigma_rules:
+        comparison = compare_with_community(sigma_rule.rule_text, community)
+        if not comparison.get("community_available"):
+            continue
+
+        for c in comparison.get("comparisons", []):
+            table = Table(
+                title=f"vs {c['community_filename']}",
+                show_header=True,
+                header_style="bold",
+                show_lines=False,
+            )
+            table.add_column("Field", style="dim", width=22)
+            table.add_column("Generated")
+            table.add_column("Community")
+            table.add_column("Match", justify="center")
+
+            def _tick(match: bool) -> str:
+                return "[green]✓[/green]" if match else "[red]✗[/red]"
+
+            ls_gen = c["generated_logsource"]
+            ls_com = c["community_logsource"]
+            table.add_row(
+                "logsource.category",
+                ls_gen.get("category", "—"),
+                ls_com.get("category", "—"),
+                _tick(ls_gen.get("category") == ls_com.get("category")),
+            )
+            table.add_row(
+                "logsource.product",
+                ls_gen.get("product", "—"),
+                ls_com.get("product", "—"),
+                _tick(ls_gen.get("product") == ls_com.get("product")),
+            )
+            table.add_row(
+                "level",
+                c["generated_level"],
+                c["community_level"],
+                _tick(c["level_match"]),
+            )
+
+            shared = ", ".join(c["shared_attack_tags"]) or "—"
+            missing = ", ".join(c["missing_attack_tags"]) or "—"
+            extra = ", ".join(c["extra_attack_tags"]) or "—"
+            table.add_row("ATT&CK shared", shared, shared, "[green]✓[/green]" if shared != "—" else "")
+            table.add_row("ATT&CK missing", "—", missing, "[red]✗[/red]" if missing != "—" else "[green]✓[/green]")
+            table.add_row("ATT&CK extra", extra, "—", "")
+
+            console.print(table)
 
 
 # Register rules command under its correct name

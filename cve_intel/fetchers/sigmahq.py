@@ -93,13 +93,17 @@ _DIR_MAX_ATTEMPTS = 3
 _RULE_MAX_ATTEMPTS = 2       # single retry for individual rule fetches
 
 
-def fetch_community_rules(cve_id: str) -> SigmaHQResult:
+def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
     """Fetch community Sigma rules for a CVE from SigmaHQ.
 
     Returns a SigmaHQResult with found=False if no rules exist.
     Never raises — network failures return found=False.
     Retries the directory listing up to 3 times on transient errors with
     exponential backoff. Each individual rule fetch gets one retry (2 attempts).
+
+    Args:
+        github_token: Optional GitHub personal access token. Raises the
+            GitHub API rate limit from 60 to 5000 req/hr when provided.
     """
     result = SigmaHQResult(cve_id=cve_id)
     year = cve_id.upper().split("-")[1]
@@ -107,8 +111,12 @@ def fetch_community_rules(cve_id: str) -> SigmaHQResult:
     dir_url = f"{_API_BASE}/{dir_path}"
     result.directory_url = dir_url
 
+    headers = dict(_HEADERS)
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
     # --- Directory listing with retry ---
-    dir_req = urllib.request.Request(dir_url, headers=_HEADERS)
+    dir_req = urllib.request.Request(dir_url, headers=headers)
     last_exc: Exception | None = None
     files = None
     for attempt in range(_DIR_MAX_ATTEMPTS):
