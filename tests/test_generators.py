@@ -52,6 +52,9 @@ def test_sigma_generator_returns_rule(mocker, sample_cve_record):
     assert rule.rule_format == RuleFormat.SIGMA
     assert rule.cve_id == "CVE-2024-21762"
     assert "title:" in rule.rule_text
+    assert "/ssl-vpn/portal.cgi" in rule.rule_text
+    assert "CVE-2024-21762" in rule.rule_text
+    assert "webserver" in rule.rule_text or "web" in rule.rule_text.lower()
 
 
 def test_sigma_check_valid_yaml(mocker):
@@ -99,6 +102,8 @@ def test_yara_generator_returns_rule(mocker, sample_cve_record):
     assert rule is not None
     assert rule.rule_format == RuleFormat.YARA
     assert "rule " in rule.rule_text
+    assert "/ssl-vpn/portal.cgi" in rule.rule_text
+    assert "CVE-2024-21762" in rule.rule_text
 
 
 def test_snort_generator_returns_rule(mocker, sample_cve_record):
@@ -128,3 +133,5 @@ def test_snort_generator_returns_rule(mocker, sample_cve_record):
     assert rule is not None
     assert rule.rule_format == RuleFormat.SNORT
     assert "alert" in rule.rule_text
+    assert "/ssl-vpn/portal.cgi" in rule.rule_text
+    assert "CVE-2024-21762" in rule.rule_text or "CVE_2024_21762" in rule.rule_text

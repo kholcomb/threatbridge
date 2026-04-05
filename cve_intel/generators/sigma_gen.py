@@ -21,6 +21,7 @@ class SigmaGenerator:
         self, cve: CVERecord, mapping: AttackMapping, iocs: IOCBundle
     ) -> DetectionRule | None:
         cvss = cve.primary_cvss
+        cvss_vector = cvss.vector_string if cvss else ""
         techniques_text = "\n".join(
             f"  - {t.technique_id}: {t.name}" for t in mapping.techniques[:6]
         ) or "  N/A"
@@ -49,6 +50,13 @@ class SigmaGenerator:
         if not rule_text:
             return None
 
+        confidence = result.get("confidence", "medium")
+        description = result.get("description", "")
+        warnings = self._check_sigma_semantics(rule_text, cvss_vector)
+        if warnings:
+            confidence = "low"
+            description = "[QUALITY WARNING] " + "; ".join(warnings) + (" — " + description if description else "")
+
         try:
             category = RuleCategory(result.get("category", "behavioral"))
         except ValueError:
@@ -59,11 +67,11 @@ class SigmaGenerator:
             rule_format=RuleFormat.SIGMA,
             category=category,
             name=result.get("name", f"Detect {cve.cve_id} exploitation"),
-            description=result.get("description", ""),
+            description=description,
             rule_text=rule_text,
             technique_ids=mapping.technique_ids,
             severity=result.get("severity", "medium"),
-            confidence=result.get("confidence", "medium"),
+            confidence=confidence,
             tags=[cve.cve_id] + mapping.technique_ids,
             generation_method="claude_generated",
         )
@@ -104,8 +112,49 @@ class SigmaGenerator:
         except Exception as exc:
             return str(exc)
 
+    def _check_sigma_semantics(self, rule_text: str, cvss_vector: str) -> list[str]:
+        """Return quality warnings. Empty list means no issues detected."""
+        warnings: list[str] = []
+        try:
+            import yaml
+            doc = yaml.safe_load(rule_text)
+            if not isinstance(doc, dict):
+                return warnings
+        except Exception:
+            return warnings
+
+        detection_strings = _extract_detection_strings(doc.get("detection", {}))
+        GENERIC = {".exe", ".dll", "cmd.exe", "powershell", "rundll32",
+                   "wscript", "cscript", "mshta", "regsvr32", ".bat", ".ps1"}
+        if detection_strings:
+            specific = [s for s in detection_strings if s.lower() not in GENERIC and len(s) > 4]
+            if not specific:
+                warnings.append("detection strings are entirely generic — no CVE-specific indicators found")
+
+        if "AV:N" in cvss_vector:
+            logsource = doc.get("logsource", {})
+            if isinstance(logsource, dict) and logsource.get("category") == "process_creation":
+                warnings.append("logsource is process_creation but CVE has network attack vector (AV:N)")
+
+        return warnings
+
     def _format_iocs(self, iocs: IOCBundle) -> str:
         lines: list[str] = []
         for ioc in iocs.all_iocs()[:20]:
             lines.append(f"  [{ioc.ioc_type.value}] {ioc.value} ({ioc.confidence.value}) — {ioc.context}")
         return "\n".join(lines) or "  (none extracted)"
+
+
+def _extract_detection_strings(obj, _key: str = "") -> list[str]:
+    """Recursively collect string leaf values from a Sigma detection dict, skipping 'condition'."""
+    results: list[str] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k != "condition":
+                results.extend(_extract_detection_strings(v, k))
+    elif isinstance(obj, list):
+        for item in obj:
+            results.extend(_extract_detection_strings(item, _key))
+    elif isinstance(obj, str):
+        results.append(obj)
+    return results

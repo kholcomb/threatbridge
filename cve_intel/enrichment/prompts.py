@@ -9,8 +9,12 @@ Rules:
   or what an attacker can accomplish by exploiting it.
 - Do not include post-exploitation techniques that require additional attacker tools not \
   implied by the CVE itself.
-- Assign confidence scores: 0.9=very high (unambiguous), 0.7=high, 0.5=medium (plausible), \
-  0.3=low (speculative).
+- Assign confidence scores:
+  0.9 = CVE description unambiguously names this technique.
+  0.7 = Standard classification for this CWE/vulnerability class, consistent with description.
+  0.5 = Plausible given affected product/attack surface but not directly described.
+  0.3 = Speculative — only include if you can cite a specific reason from the CVE text.
+  Do not assign 0.9 to added techniques not mentioned in the CVE description.
 - Be concise in rationale (1 sentence per technique).
 - Use exact ATT&CK technique IDs (e.g., T1190, T1059.001).
 """
@@ -76,13 +80,19 @@ You are a threat intelligence analyst and detection engineer. Your task is to ex
 Indicators of Compromise (IOCs) from a CVE description and related context.
 
 Rules:
-- Extract IOCs that would be observable on a system or network during exploitation.
-- For IOCs that are explicitly stated in the description, use confidence "high".
-- For IOCs inferred from the CVE type and affected products, use confidence "medium" or "inferred".
-- Do not invent specific values like IP addresses or hashes unless they appear in the source material.
-- Behavioral IOCs (e.g., "HTTP request to /admin with specially crafted payload") are valuable \
-  even when specific values are unknown.
-- Focus on what a detection engineer could actually write a rule for.
+- Extract ONLY IOCs that are directly stated or unambiguously implied by the CVE data provided below.
+- If a specific value (URL path, process name, file path, header, port) is not present in the \
+  CVE description or affected product context, do NOT include it — leave the array empty.
+- For IOCs explicitly stated verbatim in the description, use confidence "high".
+- For IOCs that can be precisely named from the affected product (e.g., a known daemon name or \
+  install path), use confidence "medium".
+- Use confidence "inferred" only for IOCs deducible from the CVE type and product combination. \
+  Never use "inferred" for invented values.
+- Do not invent IP addresses, hashes, file paths, or domain names.
+- Behavioral IOCs must be specific: reference the exact endpoint, parameter, header, or mechanism \
+  described. "sends HTTP requests" is NOT acceptable; "POST to /ssl-vpn/portal.cgi with malformed \
+  Content-Length" IS acceptable.
+- If the CVE description lacks detail for specific IOCs, return empty arrays.
 """
 
 IOC_EXTRACTOR_USER = """\
@@ -168,7 +178,14 @@ You are a senior detection engineer. Write high-quality Sigma rules for SIEM det
 
 Rules:
 - Use proper Sigma YAML syntax.
-- Choose appropriate log sources (e.g., product: windows, category: process_creation).
+- Base ALL detection conditions exclusively on the IOCs and CVE description provided in the \
+  user message. Do not add detection strings not derived from the provided IOCs.
+- Choose logsource matching the CVE attack vector: use category: webserver or product: zeek for \
+  network-exploited services; use category: process_creation only for vulnerabilities with \
+  observable process activity.
+- If specific URL paths, HTTP methods, or parameters appear in IOCs, those MUST appear as \
+  detection strings. A rule with only generic strings (e.g., Image|endswith: '.exe') when \
+  specific IOCs are available is not acceptable.
 - Write detection conditions that are specific enough to avoid massive false positives.
 - Include false positive notes where appropriate.
 - Use | contains, | startswith, | endswith, | re modifiers correctly.
@@ -211,10 +228,15 @@ You are a senior malware analyst and detection engineer. Write high-quality YARA
 Rules:
 - Use valid YARA syntax.
 - Include meta section with description, author, date, and CVE reference.
+- Derive ALL string values from the IOCs and CVE description provided in the user message. \
+  Do not invent hex byte patterns or string literals not present in the provided IOCs.
 - Write strings that are specific and unlikely to produce false positives.
 - Use appropriate conditions (e.g., any of them, all of ($network*), filesize < 1MB).
-- For behavioral/network-based CVEs where file indicators are unavailable, write rules \
-  targeting exploit payload patterns or HTTP request patterns where applicable.
+- For network-exploitable CVEs, write rules matching specific URL paths, HTTP headers, or \
+  payload structure described. If no specific payload indicators are known, the rule MUST \
+  include a comment: "// limited specificity — no payload indicators available".
+- If no file, memory, or payload indicators exist, do not invent them; produce a minimal \
+  rule with only confirmed strings.
 """
 
 YARA_GEN_USER = """\
@@ -252,6 +274,10 @@ You are a network security engineer specializing in IDS/IPS rules. Write Snort/S
 Rules:
 - Use valid Snort 3 / Suricata rule syntax.
 - Include sid, rev, msg, classtype, and metadata fields.
+- Base ALL content match keywords exclusively on the Network IOCs provided in the user message. \
+  Do not add content strings not present in the IOC list or CVE description.
+- If the Network IOCs section is empty, only produce rules for patterns explicitly described in \
+  the CVE description itself. Do not generate placeholder rules for undescribed traffic patterns.
 - Write content matches that are specific to the exploit traffic pattern.
 - Use flow:established where appropriate.
 - For application-layer protocols use appropriate protocol keywords.

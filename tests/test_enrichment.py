@@ -93,3 +93,61 @@ def test_ioc_extractor_parses_claude_output(mocker, sample_cve_record, mock_atta
     assert len(bundle.process) >= 1
     assert len(bundle.behavioral) >= 1
     assert bundle.network[0].value == "https://target/ssl-vpn/portal.cgi"
+
+
+def test_ioc_extractor_accepts_specific_behavioral_ioc(mocker, sample_cve_record, mock_attack_data):
+    """Behavioral IOCs referencing specific CVE endpoints/mechanisms should be accepted."""
+    mock_client = mocker.MagicMock()
+    mock_client.complete_structured.return_value = {
+        "network_iocs": [],
+        "file_iocs": [],
+        "process_iocs": [],
+        "behavioral_iocs": [
+            {
+                "ioc_type": "behavioral",
+                "value": "POST request to /ssl-vpn/portal.cgi with malformed Content-Length header",
+                "confidence": "inferred",
+                "context": "Network-level exploit behavior for CVE-2024-21762",
+            }
+        ],
+    }
+
+    mapping = AttackMapping(cve_id=sample_cve_record.cve_id, techniques=[])
+    extractor = IOCExtractor(mock_client)
+    bundle = extractor.extract(sample_cve_record, mapping)
+
+    assert len(bundle.behavioral) == 1
+    value = bundle.behavioral[0].value.lower()
+    assert "ssl-vpn" in value or "portal.cgi" in value, (
+        "Specific behavioral IOC must reference the CVE endpoint"
+    )
+
+
+def test_ioc_extractor_vague_behavioral_ioc_is_extractable(mocker, sample_cve_record, mock_attack_data):
+    """Documents current behavior: vague behavioral IOCs pass through without enforcement.
+
+    This test anchors the gap — a future change adding vagueness filtering should
+    update this test to assert the IOC is rejected or flagged.
+    """
+    mock_client = mocker.MagicMock()
+    mock_client.complete_structured.return_value = {
+        "network_iocs": [],
+        "file_iocs": [],
+        "process_iocs": [],
+        "behavioral_iocs": [
+            {
+                "ioc_type": "behavioral",
+                "value": "sends HTTP requests",
+                "confidence": "inferred",
+                "context": "generic network activity",
+            }
+        ],
+    }
+
+    mapping = AttackMapping(cve_id=sample_cve_record.cve_id, techniques=[])
+    extractor = IOCExtractor(mock_client)
+    bundle = extractor.extract(sample_cve_record, mapping)
+
+    # Currently passes through — no enforcement of specificity at extraction layer.
+    # Prompt grounding (IOC_EXTRACTOR_SYSTEM) is the primary control.
+    assert len(bundle.behavioral) == 1
