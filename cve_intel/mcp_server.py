@@ -68,21 +68,32 @@ data these tools return.
 - **Triage**: triage_cve, batch_triage_cves
 - **Detection**: get_community_sigma_rules, compare_sigma_rule_with_community
 
+## Avoid redundant calls
+
+triage_cve and batch_triage_cves already include full KEV and SSVC data in their
+`exploitation` field. Do NOT call get_exploitation_context after triage_cve —
+it fetches the same data a second time and returns nothing new.
+
+get_exploitation_context is only useful when you need raw Vulnrichment data
+WITHOUT running a full triage (e.g. a quick KEV check with no ATT&CK mapping).
+
 ## Primary workflows
 
 **1. Scanner triage** (e.g. Snyk / Trivy / Grype output)
-   batch_triage_cves → cross-reference attack_requirements against deployment architecture →
-   call get_exploitation_context only if you need raw KEV/SSVC fields not in the triage result →
-   recommend patches
+   batch_triage_cves → cross-reference attack_requirements against deployment
+   architecture → recommend patches.
+   The triage result contains everything needed — do not follow up with
+   get_exploitation_context for each CVE.
 
 **2. Single CVE investigation**
-   triage_cve → (exploitation field already contains KEV/SSVC — no need to call get_exploitation_context) →
-   lookup_technique per mapped technique → get_related_techniques to expand threat model →
-   get_community_sigma_rules → synthesise risk narrative
+   triage_cve → lookup_technique per mapped technique →
+   get_related_techniques to expand threat model →
+   get_community_sigma_rules → synthesise risk narrative.
+   The exploitation field in the triage result already contains KEV/SSVC data.
 
 **3. Detection coverage assessment**
    get_attack_techniques → get_community_sigma_rules →
-   lookup_technique (data_sources + detection_notes per technique) → identify gaps
+   lookup_technique (data_sources + detection_notes per technique) → identify gaps.
 
 ## Interpreting results
 
@@ -642,6 +653,11 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict[str, Any]:
 @mcp.tool()
 def get_exploitation_context(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Fetch CISA Vulnrichment exploitation context for a CVE.
+
+    NOTE: If you have already called triage_cve or batch_triage_cves, do NOT
+    call this tool — the exploitation field in those results already contains
+    all KEV and SSVC data. This tool exists for lightweight KEV/SSVC lookups
+    when a full triage is not needed.
 
     Returns KEV (Known Exploited Vulnerabilities) status and SSVC scores:
     - in_kev: whether CISA has added this to the KEV catalog
