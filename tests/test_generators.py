@@ -71,6 +71,33 @@ def test_sigma_check_invalid_yaml(mocker):
     assert gen._check_sigma("not: yaml: with: colons") is not None or True  # at minimum runs without crash
 
 
+def test_sigma_check_detects_dangling_condition(mocker):
+    """pySigma should flag a condition referencing a non-existent detection."""
+    gen = SigmaGenerator.__new__(SigmaGenerator)
+    bad_yaml = (
+        "title: Test\n"
+        "id: 12345678-1234-1234-1234-123456789abc\n"
+        "logsource:\n  category: process_creation\n"
+        "detection:\n  selection:\n    Image: test\n  condition: nonexistent\n"
+    )
+    result = gen._check_sigma(bad_yaml)
+    assert result is not None
+
+
+def test_sigma_semantics_flags_invalid_attack_tag(mocker):
+    """pySigma ATTACKTagValidator should catch malformed ATT&CK tags."""
+    gen = SigmaGenerator.__new__(SigmaGenerator)
+    rule_with_bad_tag = (
+        "title: Test\n"
+        "id: 12345678-1234-1234-1234-123456789abc\n"
+        "logsource:\n  category: webserver\n"
+        "detection:\n  selection:\n    uri: /exploit\n  condition: selection\n"
+        "tags:\n  - attack.notarealthing\n"
+    )
+    warnings = gen._check_sigma_semantics(rule_with_bad_tag, "")
+    assert any("tag" in w.lower() or "attack" in w.lower() for w in warnings)
+
+
 def test_yara_generator_returns_rule(mocker, sample_cve_record):
     client = mocker.MagicMock()
     client.complete_structured.return_value = {
