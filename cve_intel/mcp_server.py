@@ -116,6 +116,9 @@ def _compute_priority_tier(vuln: VulnrichmentData, cvss: CVSSData | None) -> str
         return "HIGH"
     if cvss and cvss.base_score >= 9.0:
         return "HIGH"
+    # Network-reachable with no auth and CVSS >= 7.0 warrants HIGH even without Vulnrichment
+    if cvss and cvss.base_score >= 7.0 and cvss.attack_vector == "NETWORK" and cvss.privileges_required == "NONE":
+        return "HIGH"
     if vuln.available and vuln.ssvc.automatable == "yes" and cvss and cvss.base_score >= 7.0:
         return "HIGH"
     if vuln.available and vuln.ssvc.technical_impact == "total":
