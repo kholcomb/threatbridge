@@ -34,13 +34,16 @@ def cli() -> None:
 @cli.command()
 @click.argument("cve_id")
 @click.option("--output", "-o", type=click.Path(), default=None,
-              help="Output directory (writes JSON + rule files).")
+              help="Output directory. Writes output files here instead of stdout.")
 @click.option("--format", "-f", "fmt",
-              type=click.Choice(["text", "json", "both", "sarif"]),
-              default="both", show_default=True,
-              help="Output format.")
-@click.option("--sarif", "sarif_file", type=click.Path(), default=None,
-              help="Write SARIF 2.1.0 output to FILE (shortcut for --format sarif).")
+              type=click.Choice(["text", "json", "sarif"]),
+              default="text", show_default=True,
+              help=(
+                  "Output format. "
+                  "text: Rich terminal report (stdout). "
+                  "json: Full analysis as JSON (stdout or --output DIR). "
+                  "sarif: SARIF 2.1.0 (stdout or --output DIR → results.sarif.json)."
+              ))
 @click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
               help="Comma-separated list of rule formats to generate.")
 @click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
@@ -49,7 +52,6 @@ def analyze(
     cve_id: str,
     output: str | None,
     fmt: str,
-    sarif_file: str | None,
     rules: str,
     no_enrich: bool,
 ) -> None:
@@ -57,11 +59,6 @@ def analyze(
 
     For multiple CVEs, use the ``batch`` command which supports concurrent workers.
     """
-    # --sarif FILE implies format=sarif
-    if sarif_file:
-        fmt = "sarif"
-        output = sarif_file
-
     from cve_intel import pipeline
     from cve_intel.output import json_renderer, text_renderer
     from cve_intel.fetchers.attack_data import get_attack_data
@@ -69,8 +66,7 @@ def analyze(
 
     rule_formats = set(r.strip().lower() for r in rules.split(",") if r.strip())
     enrich = not no_enrich
-    output_dir = Path(output) if output and fmt != "sarif" else None
-    sarif_out = Path(output) if output and fmt == "sarif" else None
+    output_dir = Path(output) if output else None
 
     prog = RichProgress()
     prog.start()
@@ -108,33 +104,30 @@ def analyze(
         )
         sys.exit(1)
 
-    if fmt in ("text", "both"):
+    if fmt == "text":
         text_renderer.render_text(result)
 
-    if fmt == "sarif":
+    elif fmt == "sarif":
         from cve_intel.output.sarif_renderer import render_sarif
         import json as _json
         sarif_data = render_sarif([result])
-        if sarif_out:
-            sarif_out.parent.mkdir(parents=True, exist_ok=True)
-            sarif_out.write_text(_json.dumps(sarif_data, indent=2))
-            console.print(f"[dim]SARIF written to {sarif_out}[/dim]")
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_file = output_dir / "results.sarif.json"
+            out_file.write_text(_json.dumps(sarif_data, indent=2))
+            console.print(f"[dim]SARIF written to {out_file}[/dim]")
         else:
             click.echo(_json.dumps(sarif_data, indent=2))
 
-    elif fmt in ("json", "both") and output_dir:
-        path = json_renderer.write_json(result, output_dir)
-        console.print(f"[dim]JSON written to {path}[/dim]")
-        rule_paths = json_renderer.write_rules(result, output_dir / "rules")
-        for rp in rule_paths:
-            console.print(f"[dim]Rule written to {rp}[/dim]")
-    elif fmt == "json" and not output_dir:
-        click.echo(json_renderer.render_json(result))
-    elif fmt == "both" and not output_dir:
-        err_console.print(
-            "[yellow]Warning:[/yellow] --format both requires --output to write JSON and rule files. "
-            "Only text output shown. Use --output DIR to save JSON and rules."
-        )
+    elif fmt == "json":
+        if output_dir:
+            path = json_renderer.write_json(result, output_dir)
+            console.print(f"[dim]JSON written to {path}[/dim]")
+            rule_paths = json_renderer.write_rules(result, output_dir / "rules")
+            for rp in rule_paths:
+                console.print(f"[dim]Rule written to {rp}[/dim]")
+        else:
+            click.echo(json_renderer.render_json(result))
 
 
 @cli.command()
