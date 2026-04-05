@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     attack_bundle_path: Path | None = None
     max_tokens: int = 4096
 
+    @field_validator("attack_bundle_path", mode="before")
+    @classmethod
+    def empty_path_is_none(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @field_validator("cache_ttl_seconds")
     @classmethod
     def cache_ttl_must_be_positive(cls, v: int) -> int:
