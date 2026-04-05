@@ -75,8 +75,23 @@ def fetch_vulnrichment(cve_id: str) -> VulnrichmentData:
     Returns a VulnrichmentData with available=False if no entry exists
     or the request fails. Never raises. Retries up to 3 times total on
     transient errors (5xx, URLError, OSError) with exponential backoff.
+
+    Caching is opt-in: set VULNRICHMENT_CACHE_TTL (seconds) in config to
+    enable. Defaults to 0 (disabled) — always fetches live.
     """
     import json
+    from cve_intel.config import settings
+
+    if settings.vulnrichment_cache_ttl > 0:
+        import diskcache
+        cache = diskcache.Cache(str(settings.cache_dir / "vulnrichment"))
+        cache_key = f"vulnrichment:{cve_id.upper()}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _from_dict(cve_id, cached)
+    else:
+        cache = None
+        cache_key = None
 
     result = VulnrichmentData(cve_id=cve_id)
     url = _cve_url(cve_id)
@@ -108,6 +123,8 @@ def fetch_vulnrichment(cve_id: str) -> VulnrichmentData:
         return result
 
     result.available = True
+    if cache is not None and cache_key is not None:
+        cache.set(cache_key, _to_dict(result), expire=settings.vulnrichment_cache_ttl)
 
     # Walk ADP containers looking for CISA's data
     for container in data.get("containers", {}).get("adp", []):
@@ -137,3 +154,31 @@ def fetch_vulnrichment(cve_id: str) -> VulnrichmentData:
                 )
 
     return result
+
+
+def _to_dict(data: VulnrichmentData) -> dict:
+    return {
+        "cve_id": data.cve_id,
+        "in_kev": data.in_kev,
+        "kev_date_added": data.kev_date_added,
+        "available": data.available,
+        "ssvc": {
+            "exploitation": data.ssvc.exploitation,
+            "automatable": data.ssvc.automatable,
+            "technical_impact": data.ssvc.technical_impact,
+        },
+    }
+
+
+def _from_dict(cve_id: str, d: dict) -> VulnrichmentData:
+    return VulnrichmentData(
+        cve_id=cve_id,
+        in_kev=d.get("in_kev", False),
+        kev_date_added=d.get("kev_date_added"),
+        available=d.get("available", False),
+        ssvc=SSVCScore(
+            exploitation=d.get("ssvc", {}).get("exploitation", "none"),
+            automatable=d.get("ssvc", {}).get("automatable", "unknown"),
+            technical_impact=d.get("ssvc", {}).get("technical_impact", "unknown"),
+        ),
+    )
