@@ -1,12 +1,21 @@
 """Tests for NVD fetcher."""
 
 import json
+import time
 from pathlib import Path
 
 import pytest
 import responses as resp_mock
 
 from cve_intel.fetchers.nvd import NVDFetcher, NVDNotFoundError, NVDRateLimitError
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """Reset the class-level rate limiter state between tests."""
+    NVDFetcher._last_request_time = 0.0
+    yield
+    NVDFetcher._last_request_time = 0.0
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -191,3 +200,66 @@ def test_malformed_cvss_severity_logs_warning(caplog):
         "ULTRA" in record.message and record.levelname == "WARNING"
         for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter tests
+# ---------------------------------------------------------------------------
+
+def test_min_interval_without_key(mocker):
+    mocker.patch("cve_intel.fetchers.nvd.settings", mocker.MagicMock(has_nvd_key=False))
+    assert NVDFetcher._min_interval() == 6.0
+
+
+def test_min_interval_with_key(mocker):
+    mocker.patch("cve_intel.fetchers.nvd.settings", mocker.MagicMock(has_nvd_key=True))
+    assert NVDFetcher._min_interval() == 0.6
+
+
+def test_throttle_sleeps_when_called_too_soon(mocker, monkeypatch):
+    """_throttle should sleep for the remaining interval when called back-to-back."""
+    mocker.patch.object(NVDFetcher, "_min_interval", return_value=6.0)
+
+    slept: list[float] = []
+    monkeypatch.setattr("cve_intel.fetchers.nvd.time.sleep", lambda s: slept.append(s))
+
+    now = time.monotonic()
+    NVDFetcher._last_request_time = now - 1.0  # request happened 1s ago, interval is 6s
+    monkeypatch.setattr("cve_intel.fetchers.nvd.time.monotonic", lambda: now)
+
+    NVDFetcher._throttle()
+
+    assert len(slept) == 1
+    assert abs(slept[0] - 5.0) < 0.1  # ~5s remaining
+
+
+def test_throttle_no_sleep_when_interval_elapsed(mocker, monkeypatch):
+    """_throttle should not sleep when the full interval has already elapsed."""
+    mocker.patch.object(NVDFetcher, "_min_interval", return_value=6.0)
+
+    slept: list[float] = []
+    monkeypatch.setattr("cve_intel.fetchers.nvd.time.sleep", lambda s: slept.append(s))
+
+    now = time.monotonic()
+    NVDFetcher._last_request_time = now - 10.0  # 10s ago, interval is 6s
+    monkeypatch.setattr("cve_intel.fetchers.nvd.time.monotonic", lambda: now)
+
+    NVDFetcher._throttle()
+
+    assert slept == []
+
+
+def test_throttle_shared_across_instances(mocker, monkeypatch):
+    """Two separate NVDFetcher instances share the same rate limiter state."""
+    mocker.patch.object(NVDFetcher, "_min_interval", return_value=6.0)
+
+    slept: list[float] = []
+    monkeypatch.setattr("cve_intel.fetchers.nvd.time.sleep", lambda s: slept.append(s))
+
+    now = time.monotonic()
+    NVDFetcher._last_request_time = now - 1.0  # simulates instance A just making a request
+    monkeypatch.setattr("cve_intel.fetchers.nvd.time.monotonic", lambda: now)
+
+    NVDFetcher._throttle()  # instance B call — should see instance A's last_request_time
+
+    assert len(slept) == 1

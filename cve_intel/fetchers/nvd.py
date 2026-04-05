@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 import diskcache
 import requests
 from datetime import datetime
@@ -33,6 +35,26 @@ class NVDRateLimitError(NVDError):
 
 
 class NVDFetcher:
+    # Class-level rate limiter shared across all instances and threads.
+    # NVD enforces a rolling 30-second window: 5 req/30s without a key,
+    # 50 req/30s with one.  We pace to the conservative per-request interval
+    # (6.0s / 0.6s) so we never approach the limit regardless of concurrency.
+    _rate_lock: threading.Lock = threading.Lock()
+    _last_request_time: float = 0.0
+
+    @classmethod
+    def _min_interval(cls) -> float:
+        return 0.6 if settings.has_nvd_key else 6.0
+
+    @classmethod
+    def _throttle(cls) -> None:
+        with cls._rate_lock:
+            elapsed = time.monotonic() - cls._last_request_time
+            wait = cls._min_interval() - elapsed
+            if wait > 0:
+                time.sleep(wait)
+            cls._last_request_time = time.monotonic()
+
     def __init__(self) -> None:
         self._cache = diskcache.Cache(str(settings.cache_dir / "nvd"))
         self._session = requests.Session()
@@ -57,6 +79,8 @@ class NVDFetcher:
         return record
 
     def _fetch_raw(self, cve_id: str) -> dict[str, Any]:
+        self._throttle()
+
         params: dict[str, str] = {"cveId": cve_id}
         headers: dict[str, str] = {}
         if settings.has_nvd_key:
