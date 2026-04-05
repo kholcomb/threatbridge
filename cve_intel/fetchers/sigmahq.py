@@ -101,10 +101,26 @@ def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
     Retries the directory listing up to 3 times on transient errors with
     exponential backoff. Each individual rule fetch gets one retry (2 attempts).
 
+    Caching is opt-in: set SIGMAHQ_CACHE_TTL (seconds) in config to enable.
+    Defaults to 0 (disabled) — always fetches live.
+
     Args:
         github_token: Optional GitHub personal access token. Raises the
             GitHub API rate limit from 60 to 5000 req/hr when provided.
     """
+    from cve_intel.config import settings
+
+    if settings.sigmahq_cache_ttl > 0:
+        import diskcache
+        cache = diskcache.Cache(str(settings.cache_dir / "sigmahq"))
+        cache_key = f"sigmahq:{cve_id.upper()}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return _result_from_dict(cached)
+    else:
+        cache = None
+        cache_key = None
+
     result = SigmaHQResult(cve_id=cve_id)
     year = cve_id.upper().split("-")[1]
     dir_path = f"rules-emerging-threats/{year}/Exploits/{cve_id.upper()}"
@@ -188,7 +204,38 @@ def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
             download_url=dl_url,
         ))
 
+    if cache is not None and cache_key is not None and result.found:
+        cache.set(cache_key, _result_to_dict(result), expire=settings.sigmahq_cache_ttl)
+
     return result
+
+
+def _result_to_dict(result: SigmaHQResult) -> dict:
+    return {
+        "cve_id": result.cve_id,
+        "found": result.found,
+        "directory_url": result.directory_url,
+        "rules": [
+            {"filename": r.filename, "rule_text": r.rule_text, "download_url": r.download_url}
+            for r in result.rules
+        ],
+    }
+
+
+def _result_from_dict(d: dict) -> SigmaHQResult:
+    return SigmaHQResult(
+        cve_id=d["cve_id"],
+        found=d["found"],
+        directory_url=d.get("directory_url", ""),
+        rules=[
+            CommunityRule(
+                filename=r["filename"],
+                rule_text=r["rule_text"],
+                download_url=r["download_url"],
+            )
+            for r in d.get("rules", [])
+        ],
+    )
 
 
 def compare_with_community(generated_rule_text: str, community: SigmaHQResult) -> dict[str, Any]:

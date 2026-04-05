@@ -637,6 +637,15 @@ def cache_clear() -> None:
             c.clear()
     console.print(f"[green]Cleared {vuln_count} Vulnrichment entries.[/green]")
 
+    # SigmaHQ
+    sigmahq_path = settings.cache_dir / "sigmahq"
+    sigmahq_count = 0
+    if sigmahq_path.exists():
+        with diskcache.Cache(str(sigmahq_path)) as c:
+            sigmahq_count = len(c)
+            c.clear()
+    console.print(f"[green]Cleared {sigmahq_count} SigmaHQ entries.[/green]")
+
     # ATT&CK bundle
     attack_path = settings.cache_dir / "attack"
     if attack_path.exists():

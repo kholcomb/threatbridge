@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     cache_dir: Path = _default_cache_dir()
     cache_ttl_seconds: int = 86400
     vulnrichment_cache_ttl: int = 0  # 0 = disabled; set to seconds (e.g. 3600) to cache
+    sigmahq_cache_ttl: int = 0       # 0 = disabled; set to seconds (e.g. 3600) to cache
     attack_bundle_path: Path | None = None
     max_tokens: int = 4096
 
