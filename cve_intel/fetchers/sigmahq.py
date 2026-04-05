@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import urllib.error
 import urllib.request
 import json
@@ -86,11 +87,18 @@ class SigmaHQResult:
         }
 
 
+_DIR_RETRY_DELAYS = [1, 2]   # backoff for directory listing (3 attempts)
+_DIR_MAX_ATTEMPTS = 3
+_RULE_MAX_ATTEMPTS = 2       # single retry for individual rule fetches
+
+
 def fetch_community_rules(cve_id: str) -> SigmaHQResult:
     """Fetch community Sigma rules for a CVE from SigmaHQ.
 
     Returns a SigmaHQResult with found=False if no rules exist.
     Never raises — network failures return found=False.
+    Retries the directory listing up to 3 times on transient errors with
+    exponential backoff. Each individual rule fetch gets one retry (2 attempts).
     """
     result = SigmaHQResult(cve_id=cve_id)
     year = cve_id.upper().split("-")[1]
@@ -98,16 +106,30 @@ def fetch_community_rules(cve_id: str) -> SigmaHQResult:
     dir_url = f"{_API_BASE}/{dir_path}"
     result.directory_url = dir_url
 
-    try:
-        req = urllib.request.Request(dir_url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-            files = json.loads(r.read())
-    except urllib.error.HTTPError as exc:
-        if exc.code != 404:
-            logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, exc)
-        return result
-    except Exception as exc:
-        logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, exc)
+    # --- Directory listing with retry ---
+    dir_req = urllib.request.Request(dir_url, headers=_HEADERS)
+    last_exc: Exception | None = None
+    files = None
+    for attempt in range(_DIR_MAX_ATTEMPTS):
+        if attempt > 0:
+            time.sleep(_DIR_RETRY_DELAYS[attempt - 1])
+        try:
+            with urllib.request.urlopen(dir_req, timeout=_TIMEOUT) as r:
+                files = json.loads(r.read())
+            last_exc = None
+            break  # success
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                # 4xx — definitive answer, no retry
+                if exc.code != 404:
+                    logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, exc)
+                return result
+            last_exc = exc
+        except Exception as exc:
+            last_exc = exc
+
+    if files is None:
+        logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, last_exc)
         return result
 
     yml_files = [f for f in files if f.get("name", "").endswith(".yml")]
@@ -119,22 +141,43 @@ def fetch_community_rules(cve_id: str) -> SigmaHQResult:
         dl_url = file_meta.get("download_url", "")
         if not dl_url:
             continue
-        try:
-            req = urllib.request.Request(dl_url, headers={"User-Agent": "cve-intel/0.1"})
-            with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-                rule_text = r.read().decode()
-            result.rules.append(CommunityRule(
-                filename=file_meta["name"],
-                rule_text=rule_text,
-                download_url=dl_url,
-            ))
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
-                logger.warning("SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, exc)
+
+        # --- Individual rule fetch with single retry ---
+        rule_req = urllib.request.Request(dl_url, headers={"User-Agent": "cve-intel/0.1"})
+        rule_last_exc: Exception | None = None
+        rule_text: str | None = None
+        for attempt in range(_RULE_MAX_ATTEMPTS):
+            if attempt > 0:
+                time.sleep(1)
+            try:
+                with urllib.request.urlopen(rule_req, timeout=_TIMEOUT) as r:
+                    rule_text = r.read().decode()
+                rule_last_exc = None
+                break  # success
+            except urllib.error.HTTPError as exc:
+                if exc.code < 500:
+                    if exc.code != 404:
+                        logger.warning(
+                            "SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, exc
+                        )
+                    rule_last_exc = None  # definitive, don't log again below
+                    break
+                rule_last_exc = exc
+            except Exception as exc:
+                rule_last_exc = exc
+
+        if rule_text is None:
+            if rule_last_exc is not None:
+                logger.warning(
+                    "SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, rule_last_exc
+                )
             continue
-        except Exception as exc:
-            logger.warning("SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, exc)
-            continue
+
+        result.rules.append(CommunityRule(
+            filename=file_meta["name"],
+            rule_text=rule_text,
+            download_url=dl_url,
+        ))
 
     return result
 
