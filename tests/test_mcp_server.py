@@ -1,5 +1,6 @@
 """Tests for MCP server tools (all external calls mocked)."""
 
+import asyncio
 import json
 import pytest
 from unittest.mock import MagicMock, patch
@@ -544,3 +545,80 @@ def test_triage_then_lookup_technique_consistent(mocker, sample_cve_record, mock
     assert isinstance(lookup_result, dict)
     assert lookup_result["technique_id"] == top_technique_id
     assert lookup_result["name"] == top_technique_name
+
+
+# ---------------------------------------------------------------------------
+# Lifespan context manager lifecycle tests
+# ---------------------------------------------------------------------------
+
+def test_lifespan_loads_attack_data_successfully(mock_attack_data):
+    """lifespan yields attack_data when get_attack_data succeeds."""
+    from cve_intel.mcp_server import lifespan
+    mock_server = MagicMock()
+
+    async def _run():
+        with patch("cve_intel.mcp_server.get_attack_data", return_value=mock_attack_data):
+            async with lifespan(mock_server) as ctx:
+                assert ctx["attack_data"] is mock_attack_data
+
+    asyncio.run(_run())
+
+
+def test_lifespan_yields_none_on_attack_data_failure():
+    """lifespan yields attack_data=None when AttackDataError is raised."""
+    from cve_intel.mcp_server import lifespan
+    from cve_intel.fetchers.attack_data import AttackDataError
+    mock_server = MagicMock()
+
+    async def _run():
+        with patch(
+            "cve_intel.mcp_server.get_attack_data",
+            side_effect=AttackDataError("bundle missing"),
+        ):
+            async with lifespan(mock_server) as ctx:
+                assert ctx["attack_data"] is None
+
+    asyncio.run(_run())
+
+
+def test_lifespan_yields_none_on_unexpected_error():
+    """lifespan yields attack_data=None for any unexpected exception, not just AttackDataError."""
+    from cve_intel.mcp_server import lifespan
+    mock_server = MagicMock()
+
+    async def _run():
+        with patch(
+            "cve_intel.mcp_server.get_attack_data",
+            side_effect=RuntimeError("disk full"),
+        ):
+            async with lifespan(mock_server) as ctx:
+                assert ctx["attack_data"] is None
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Full tool pipeline: fetch_cve then triage_cve with shared context
+# ---------------------------------------------------------------------------
+
+def test_full_tool_pipeline_fetch_then_triage(mocker, sample_cve_record, mock_attack_data):
+    """fetch_cve followed by triage_cve should produce consistent CVE data."""
+    from cve_intel.mcp_server import fetch_cve, triage_cve
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData
+
+    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        return_value=VulnrichmentData(cve_id="CVE-2024-21762"),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    fetch_result = fetch_cve("CVE-2024-21762", ctx)
+    triage_result = triage_cve("CVE-2024-21762", ctx)
+
+    # Both tools should agree on the CVE ID
+    assert fetch_result["cve_id"] == "CVE-2024-21762"
+    assert triage_result["cve_id"] == "CVE-2024-21762"
+    # cvss_score is not a top-level key in either result — both absent is consistent
+    assert fetch_result.get("cvss_score") == triage_result.get("cvss_score")

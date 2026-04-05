@@ -101,6 +101,69 @@ def test_fetch_403_raises_rate_limit(tmp_path, monkeypatch):
         fetcher.fetch("CVE-2024-21762")
 
 
+@resp_mock.activate
+def test_nvd_fetcher_returns_cached_result_on_second_call(tmp_path):
+    """Second fetch for same CVE ID hits cache — HTTP is called only once."""
+    fixture = _load_fixture("nvd_response_CVE-2024-21762.json")
+    resp_mock.add(
+        resp_mock.GET,
+        "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        json=fixture,
+        status=200,
+    )
+
+    import diskcache
+    import requests as req_lib
+
+    fetcher = NVDFetcher.__new__(NVDFetcher)
+    fetcher._cache = diskcache.Cache(str(tmp_path / "nvd"))
+    fetcher._session = req_lib.Session()
+
+    record1 = fetcher.fetch("CVE-2024-21762")
+    record2 = fetcher.fetch("CVE-2024-21762")
+
+    assert record1.cve_id == record2.cve_id == "CVE-2024-21762"
+    # responses library tracks every call; only one HTTP request should have been made
+    assert len(resp_mock.calls) == 1
+
+
+@resp_mock.activate
+def test_nvd_fetcher_refetches_after_cache_expiry(tmp_path):
+    """After the cache entry is deleted (simulating expiry), the fetcher re-fetches via HTTP."""
+    fixture = _load_fixture("nvd_response_CVE-2024-21762.json")
+    resp_mock.add(
+        resp_mock.GET,
+        "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        json=fixture,
+        status=200,
+    )
+    resp_mock.add(
+        resp_mock.GET,
+        "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        json=fixture,
+        status=200,
+    )
+
+    import diskcache
+    import requests as req_lib
+
+    fetcher = NVDFetcher.__new__(NVDFetcher)
+    fetcher._cache = diskcache.Cache(str(tmp_path / "nvd"))
+    fetcher._session = req_lib.Session()
+
+    # First fetch — populates the cache
+    record1 = fetcher.fetch("CVE-2024-21762")
+    assert len(resp_mock.calls) == 1
+
+    # Simulate expiry by deleting the cache entry directly
+    fetcher._cache.delete("nvd:CVE-2024-21762")
+
+    # Second fetch — cache miss, must go back to HTTP
+    record2 = fetcher.fetch("CVE-2024-21762")
+    assert len(resp_mock.calls) == 2
+    assert record1.cve_id == record2.cve_id == "CVE-2024-21762"
+
+
 def test_malformed_cvss_severity_logs_warning(caplog):
     """_build_cvss should log a warning when baseSeverity is unrecognized."""
     fetcher = NVDFetcher.__new__(NVDFetcher)
