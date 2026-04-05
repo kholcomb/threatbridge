@@ -9,9 +9,13 @@ Data source: https://github.com/cisagov/vulnrichment
 
 from __future__ import annotations
 
+import logging
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 _BRANCH = "develop"
 _BASE_URL = f"https://raw.githubusercontent.com/cisagov/vulnrichment/{_BRANCH}"
@@ -73,7 +77,15 @@ def fetch_vulnrichment(cve_id: str) -> VulnrichmentData:
         with urllib.request.urlopen(req, timeout=10) as r:
             import json
             data = json.loads(r.read())
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
+        return result
+    except (urllib.error.URLError, OSError) as exc:
+        logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
+        return result
+    except Exception as exc:
+        logger.warning("Vulnrichment fetch failed for %s: %s", cve_id, exc)
         return result
 
     result.available = True

@@ -8,9 +8,14 @@ Used to compare generated rules against community-validated baselines.
 
 from __future__ import annotations
 
+import logging
+import re
+import urllib.error
 import urllib.request
 import json
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.github.com/repos/SigmaHQ/sigma/contents"
 _HEADERS = {
@@ -18,6 +23,11 @@ _HEADERS = {
     "Accept": "application/vnd.github.v3+json",
 }
 _TIMEOUT = 10
+
+# Compiled regex patterns (module-level for efficiency)
+_RE_LOGSOURCE_BLOCK = re.compile(r'logsource:\s*\n((?:\s+\w[^\n]*\n)+)')
+_RE_ATTACK_TAG = re.compile(r'attack\.\w+')
+_RE_CVE_TAG = re.compile(r'cve\.\d{4}-\d+')
 
 
 @dataclass
@@ -37,10 +47,9 @@ class SigmaHQResult:
     @property
     def logsources(self) -> list[str]:
         """Extract logsource category/product values from all community rules."""
-        import re
         results = []
         for rule in self.rules:
-            for m in re.finditer(r'logsource:\s*\n((?:\s+\w[^\n]*\n)+)', rule.rule_text):
+            for m in _RE_LOGSOURCE_BLOCK.finditer(rule.rule_text):
                 block = m.group(1)
                 for line in block.splitlines():
                     if ":" in line:
@@ -51,19 +60,17 @@ class SigmaHQResult:
     @property
     def attack_tags(self) -> list[str]:
         """Extract ATT&CK tags from all community rules."""
-        import re
         tags = []
         for rule in self.rules:
-            tags.extend(re.findall(r'attack\.\w+', rule.rule_text))
+            tags.extend(_RE_ATTACK_TAG.findall(rule.rule_text))
         return sorted(set(tags))
 
     @property
     def cve_tags(self) -> list[str]:
         """Extract CVE tags from all community rules."""
-        import re
         tags = []
         for rule in self.rules:
-            tags.extend(re.findall(r'cve\.\d{4}-\d+', rule.rule_text))
+            tags.extend(_RE_CVE_TAG.findall(rule.rule_text))
         return sorted(set(tags))
 
     def summary(self) -> dict:
@@ -95,7 +102,12 @@ def fetch_community_rules(cve_id: str) -> SigmaHQResult:
         req = urllib.request.Request(dir_url, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
             files = json.loads(r.read())
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, exc)
+        return result
+    except Exception as exc:
+        logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, exc)
         return result
 
     yml_files = [f for f in files if f.get("name", "").endswith(".yml")]
@@ -116,7 +128,12 @@ def fetch_community_rules(cve_id: str) -> SigmaHQResult:
                 rule_text=rule_text,
                 download_url=dl_url,
             ))
-        except Exception:
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                logger.warning("SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, exc)
+            continue
+        except Exception as exc:
+            logger.warning("SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, exc)
             continue
 
     return result
@@ -127,7 +144,6 @@ def compare_with_community(generated_rule_text: str, community: SigmaHQResult) -
 
     Returns a comparison dict highlighting key differences.
     """
-    import re
     import yaml
 
     if not community.found:

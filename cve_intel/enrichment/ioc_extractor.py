@@ -49,7 +49,7 @@ class IOCExtractor:
             ]):
                 continue
             # Flag potentially malicious or PoC domains in references
-            if domain and "exploit" in url.lower() or "poc" in url.lower():
+            if domain and ("exploit" in url.lower() or "poc" in url.lower()):
                 bundle.network.append(IOC(
                     ioc_type=IOCType.URL,
                     value=url,
