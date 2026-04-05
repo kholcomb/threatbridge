@@ -14,6 +14,8 @@ from mcp.server.fastmcp import FastMCP, Context
 
 from cve_intel.fetchers.attack_data import get_attack_data, AttackData
 from cve_intel.fetchers.nvd import NVDFetcher
+from cve_intel.fetchers.sigmahq import fetch_community_rules, compare_with_community
+from cve_intel.fetchers.vulnrichment import fetch_vulnrichment
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
 from cve_intel.mappers.cvss_to_attack import map_cvss_to_attack
 
@@ -145,6 +147,72 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict:
         "cve": record.model_dump(mode="json"),
         "attack_mapping": mapping.model_dump(mode="json"),
     }
+
+
+@mcp.tool()
+def get_exploitation_context(cve_id: str, ctx: Context) -> dict:
+    """Fetch CISA Vulnrichment exploitation context for a CVE.
+
+    Returns KEV (Known Exploited Vulnerabilities) status and SSVC scores:
+    - in_kev: whether CISA has added this to the KEV catalog
+    - kev_date_added: date first added to KEV
+    - ssvc_exploitation: "active", "poc", or "none"
+    - ssvc_automatable: "yes" or "no"
+    - ssvc_technical_impact: "total" or "partial"
+    - is_actively_exploited: true if KEV or SSVC exploitation=active
+    - suggested_severity: "critical"/"high" if exploitation context warrants it, else null
+
+    Returns available=false if no Vulnrichment entry exists for this CVE.
+    """
+    data = fetch_vulnrichment(cve_id)
+    return {
+        "cve_id": data.cve_id,
+        "available": data.available,
+        "in_kev": data.in_kev,
+        "kev_date_added": data.kev_date_added,
+        "ssvc_exploitation": data.ssvc.exploitation,
+        "ssvc_automatable": data.ssvc.automatable,
+        "ssvc_technical_impact": data.ssvc.technical_impact,
+        "is_actively_exploited": data.is_actively_exploited,
+        "suggested_severity": data.suggested_severity_boost(),
+    }
+
+
+@mcp.tool()
+def get_community_sigma_rules(cve_id: str, ctx: Context) -> dict:
+    """Fetch community Sigma rules for a CVE from the SigmaHQ/sigma repository.
+
+    Returns rules from rules-emerging-threats/{YEAR}/Exploits/{CVE_ID}/ if they exist.
+    Includes rule text, logsource details, and ATT&CK tags from the community rules.
+
+    Use the result to:
+    - Validate that your generated rule uses the correct logsource
+    - Check ATT&CK tag alignment against community consensus
+    - Compare detection logic against a vetted baseline
+    - Identify coverage gaps (e.g., community has 3 rules, you generated 1)
+
+    Returns found=false if no community rule exists for this CVE.
+    """
+    result = fetch_community_rules(cve_id)
+    return result.summary()
+
+
+@mcp.tool()
+def compare_sigma_rule_with_community(
+    cve_id: str, generated_rule_text: str, ctx: Context
+) -> dict:
+    """Compare a generated Sigma rule against SigmaHQ community rules.
+
+    Fetches community rules for the CVE and returns a structured comparison:
+    - logsource_match: whether category/product matches community
+    - shared/missing/extra ATT&CK tags
+    - level (severity) alignment
+
+    Use this after generating a rule to identify quality gaps before deployment.
+    Returns community_available=false if no community rules exist.
+    """
+    community = fetch_community_rules(cve_id)
+    return compare_with_community(generated_rule_text, community)
 
 
 def main() -> None:

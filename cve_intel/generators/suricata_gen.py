@@ -1,18 +1,22 @@
-"""Snort/Suricata rule generation."""
+"""Suricata rule generation.
+
+Suricata extends Snort syntax with sticky buffers (http.uri, http.method,
+http.request_body, dns.query.name, etc.) and app-layer-protocol detection.
+"""
 
 from cve_intel.enrichment.claude_client import ClaudeClient
 from cve_intel.enrichment.prompts import (
-    SNORT_GEN_SYSTEM,
-    SNORT_GEN_USER,
-    SNORT_GEN_SCHEMA,
+    SURICATA_GEN_SYSTEM,
+    SURICATA_GEN_USER,
+    SURICATA_GEN_SCHEMA,
 )
 from cve_intel.models.attack import AttackMapping
 from cve_intel.models.cve import CVERecord
-from cve_intel.models.ioc import IOCBundle, IOCType
+from cve_intel.models.ioc import IOCBundle
 from cve_intel.models.rules import DetectionRule, RuleCategory, RuleFormat
 
 
-class SnortGenerator:
+class SuricataGenerator:
     def __init__(self, client: ClaudeClient) -> None:
         self._client = client
 
@@ -29,7 +33,7 @@ class SnortGenerator:
         ]
         ioc_lines = self._format_iocs_for_network(network_iocs)
 
-        user_msg = SNORT_GEN_USER.format(
+        user_msg = SURICATA_GEN_USER.format(
             cve_id=cve.cve_id,
             description=cve.description_en[:1500],
             products=", ".join(cve.affected_products[:8]) or "N/A",
@@ -38,10 +42,10 @@ class SnortGenerator:
         )
 
         result = self._client.complete_structured(
-            system=SNORT_GEN_SYSTEM,
+            system=SURICATA_GEN_SYSTEM,
             user=user_msg,
-            output_schema=SNORT_GEN_SCHEMA,
-            tool_name="generate_snort_rule",
+            output_schema=SURICATA_GEN_SCHEMA,
+            tool_name="generate_suricata_rule",
         )
 
         rule_text = result.get("rule_text", "").strip()
@@ -50,14 +54,14 @@ class SnortGenerator:
 
         confidence = result.get("confidence", "medium")
         description = result.get("description", "")
-        warnings = self._check_snort_semantics(rule_text)
+        warnings = self._check_suricata_semantics(rule_text)
         if warnings:
             confidence = "low"
             description = "[QUALITY WARNING] " + "; ".join(warnings) + (" — " + description if description else "")
 
         return DetectionRule(
             cve_id=cve.cve_id,
-            rule_format=RuleFormat.SNORT,
+            rule_format=RuleFormat.SURICATA,
             category=RuleCategory.NETWORK_DETECTION,
             name=result.get("name", f"Detect {cve.cve_id} network exploit"),
             description=description,
@@ -69,7 +73,7 @@ class SnortGenerator:
             generation_method="claude_generated",
         )
 
-    def _check_snort_semantics(self, rule_text: str) -> list[str]:
+    def _check_suricata_semantics(self, rule_text: str) -> list[str]:
         """Return quality warnings. Empty list means no issues detected."""
         import re
         warnings: list[str] = []
@@ -81,6 +85,11 @@ class SnortGenerator:
             specific = [c for c in content_matches if c not in GENERIC and len(c) > 3]
             if not specific:
                 warnings.append("content matches are all generic HTTP method/version strings")
+        # Flag Snort-style modifiers that should be sticky buffers in Suricata
+        if re.search(r'content:"[^"]+"; http_uri', rule_text):
+            warnings.append("use http.uri sticky buffer instead of http_uri modifier for Suricata")
+        if re.search(r'content:"[^"]+"; http_method', rule_text):
+            warnings.append("use http.method sticky buffer instead of http_method modifier for Suricata")
         return warnings
 
     def _format_iocs_for_network(self, iocs) -> str:

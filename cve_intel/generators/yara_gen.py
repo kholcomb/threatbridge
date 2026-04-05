@@ -47,6 +47,13 @@ class YaraGenerator:
         if not rule_text:
             return None
 
+        confidence = result.get("confidence", "medium")
+        description = result.get("description", "")
+        warnings = self._check_yara_semantics(rule_text, iocs)
+        if warnings:
+            confidence = "low"
+            description = "[QUALITY WARNING] " + "; ".join(warnings) + (" — " + description if description else "")
+
         try:
             category = RuleCategory(result.get("category", "file_detection"))
         except ValueError:
@@ -57,11 +64,11 @@ class YaraGenerator:
             rule_format=RuleFormat.YARA,
             category=category,
             name=result.get("name", f"detect_{cve.cve_id.replace('-', '_')}"),
-            description=result.get("description", ""),
+            description=description,
             rule_text=rule_text,
             technique_ids=mapping.technique_ids,
             severity=result.get("severity", "medium"),
-            confidence=result.get("confidence", "medium"),
+            confidence=confidence,
             tags=[cve.cve_id] + mapping.technique_ids,
             generation_method="claude_generated",
         )
@@ -94,6 +101,21 @@ class YaraGenerator:
             return None
         except Exception as exc:
             return str(exc)
+
+    def _check_yara_semantics(self, rule_text: str, iocs: IOCBundle) -> list[str]:
+        """Return quality warnings. Empty list means no issues detected."""
+        import re
+        warnings: list[str] = []
+        hex_strings = re.findall(r'\$\w+\s*=\s*\{[^}]+\}', rule_text)
+        text_strings = re.findall(r'\$\w+\s*=\s*"[^"]+"', rule_text)
+        if hex_strings and not text_strings:
+            ioc_values = [ioc.value for ioc in iocs.all_iocs()]
+            has_hex_iocs = any(re.match(r'^[0-9a-fA-F]{8,}$', v) for v in ioc_values)
+            if not has_hex_iocs:
+                warnings.append("YARA rule contains only hex patterns with no matching IOC evidence — may be hallucinated")
+        if not hex_strings and not text_strings:
+            warnings.append("YARA rule has no string definitions")
+        return warnings
 
     def _format_iocs(self, iocs: IOCBundle) -> str:
         lines: list[str] = []

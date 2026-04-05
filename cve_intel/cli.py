@@ -25,7 +25,7 @@ def cli() -> None:
 @click.option("--format", "-f", "fmt", type=click.Choice(["text", "json", "both"]),
               default="both", show_default=True,
               help="Output format.")
-@click.option("--rules", "-r", default="sigma,yara,snort", show_default=True,
+@click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
               help="Comma-separated list of rule formats to generate.")
 @click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
               help="Skip Claude enrichment (deterministic only, no API key needed).")

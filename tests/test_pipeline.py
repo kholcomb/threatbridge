@@ -55,6 +55,12 @@ def test_pipeline_full_enriched(mocker, sample_cve_record, mock_attack_data):
             "name": "Test Snort", "description": "Test",
             "severity": "critical", "confidence": "medium",
         },
+        # SuricataGenerator
+        {
+            "rule_text": 'alert http any any -> any any (msg:"Test Suricata"; http.uri; content:"/test"; sid:2; rev:1;)',
+            "name": "Test Suricata", "description": "Test",
+            "severity": "critical", "confidence": "medium",
+        },
     ]
 
     from cve_intel.pipeline import analyze
@@ -67,6 +73,7 @@ def test_pipeline_full_enriched(mocker, sample_cve_record, mock_attack_data):
     assert len(result.rule_bundle.sigma_rules) == 1
     assert len(result.rule_bundle.yara_rules) == 1
     assert len(result.rule_bundle.snort_rules) == 1
+    assert len(result.rule_bundle.suricata_rules) == 1
 
 
 def test_pipeline_no_enrich(mocker, sample_cve_record, mock_attack_data):
