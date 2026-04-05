@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
@@ -40,6 +41,7 @@ def analyze(
     rule_formats: RuleFormats | None = None,
     attack_data: AttackData | None = None,
     progress: "ProgressContext | None" = None,
+    extract_iocs: bool = True,
 ) -> AnalysisResult:
     """Run the full CVE analysis pipeline.
 
@@ -49,6 +51,8 @@ def analyze(
         rule_formats: Which rule formats to generate. Defaults to all four.
         attack_data: Pre-loaded ATT&CK data (avoids re-downloading in batch mode).
         progress: Optional progress context for reporting stage status.
+        extract_iocs: Whether to run IOC extraction. Set False when only the
+            ATT&CK mapping is needed (e.g. the ``map`` command).
     """
     if rule_formats is None:
         rule_formats = {"sigma", "yara", "snort", "suricata"}
@@ -102,11 +106,14 @@ def analyze(
             enricher = AttackEnricher(client, attack_data)
             mapping = enricher.enrich(cve_record, mapping)
 
-            # Stage 6: IOC Extraction
-            prog.advance("Extracting IOCs")
-            prog.set_description("Calling Claude: IOC extraction…")
-            extractor = IOCExtractor(client)
-            ioc_bundle = extractor.extract(cve_record, mapping)
+            # Stage 6: IOC Extraction (skipped when only the mapping is needed)
+            if extract_iocs:
+                prog.advance("Extracting IOCs")
+                prog.set_description("Calling Claude: IOC extraction…")
+                extractor = IOCExtractor(client)
+                ioc_bundle = extractor.extract(cve_record, mapping)
+            else:
+                ioc_bundle = IOCBundle(cve_id=cve_id)
 
             # Stage 7: Rule Generation
             prog.advance("Generating detection rules")
@@ -178,31 +185,26 @@ def _generate_rules(
     ioc_bundle: IOCBundle,
     rule_formats: RuleFormats,
 ) -> RuleBundle:
+    _GENERATORS = {
+        "sigma": (SigmaGenerator, "sigma_rules"),
+        "yara": (YaraGenerator, "yara_rules"),
+        "snort": (SnortGenerator, "snort_rules"),
+        "suricata": (SuricataGenerator, "suricata_rules"),
+    }
+
+    active = [(fmt, gen_cls, attr) for fmt, (gen_cls, attr) in _GENERATORS.items() if fmt in rule_formats]
+
+    def _run(gen_cls, attr):
+        rule = gen_cls(client).generate(cve_record, mapping, ioc_bundle)
+        return attr, rule
+
     bundle = RuleBundle(cve_id=cve_record.cve_id)
-
-    if "sigma" in rule_formats:
-        gen = SigmaGenerator(client)
-        rule = gen.generate(cve_record, mapping, ioc_bundle)
-        if rule:
-            bundle.sigma_rules.append(rule)
-
-    if "yara" in rule_formats:
-        gen = YaraGenerator(client)
-        rule = gen.generate(cve_record, mapping, ioc_bundle)
-        if rule:
-            bundle.yara_rules.append(rule)
-
-    if "snort" in rule_formats:
-        gen = SnortGenerator(client)
-        rule = gen.generate(cve_record, mapping, ioc_bundle)
-        if rule:
-            bundle.snort_rules.append(rule)
-
-    if "suricata" in rule_formats:
-        gen = SuricataGenerator(client)
-        rule = gen.generate(cve_record, mapping, ioc_bundle)
-        if rule:
-            bundle.suricata_rules.append(rule)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as executor:
+        futures = {executor.submit(_run, gen_cls, attr): fmt for fmt, gen_cls, attr in active}
+        for future in concurrent.futures.as_completed(futures):
+            attr, rule = future.result()
+            if rule:
+                getattr(bundle, attr).append(rule)
 
     return bundle
 
