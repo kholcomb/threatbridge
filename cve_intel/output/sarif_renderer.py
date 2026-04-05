@@ -6,6 +6,7 @@ Produces output compatible with the GitHub Security tab
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from cve_intel import __version__
@@ -18,7 +19,7 @@ _SARIF_SCHEMA = (
     "Schemata/sarif-schema-2.1.0.json"
 )
 
-_CVSS_TO_LEVEL = {
+_CVSS_SEVERITY_TO_LEVEL = {
     "critical": "error",
     "high": "warning",
     "medium": "note",
@@ -26,30 +27,80 @@ _CVSS_TO_LEVEL = {
 }
 
 
-def _cvss_score_to_level(score: float | None, severity: str | None) -> str:
+@dataclass
+class SarifPolicy:
+    """Controls how CVE risk signals map to SARIF levels.
+
+    CVSS thresholds are the baseline.  KEV and SSVC signals take priority —
+    explicit exploitation evidence overrides a numeric score.
+
+    Defaults represent a reasonable starting point for most environments:
+    - KEV-listed CVEs are always errors (CISA mandates patching within 2 weeks).
+    - Actively exploited CVEs are always errors regardless of CVSS score.
+    - CVEs with a public PoC are bumped to at least warning.
+    """
+
+    cvss_error: float = 9.0
+    cvss_warning: float = 7.0
+    cvss_note: float = 4.0
+    kev_is_error: bool = True
+    ssvc_active_is_error: bool = True
+    ssvc_poc_is_warning: bool = True
+
+
+def _assign_level(
+    score: float | None,
+    severity: str | None,
+    vuln_meta: dict,
+    policy: SarifPolicy,
+) -> str:
+    """Assign a SARIF level using policy, KEV/SSVC signals, then CVSS score."""
+
+    # Exploitation evidence takes priority over CVSS score.
+    if policy.kev_is_error and vuln_meta.get("in_kev"):
+        return "error"
+    if policy.ssvc_active_is_error and vuln_meta.get("ssvc_exploitation") == "active":
+        return "error"
+
+    # CVSS baseline.
     if score is not None:
-        if score >= 9.0:
-            return "error"
-        if score >= 7.0:
-            return "warning"
-        if score >= 4.0:
-            return "note"
-        return "none"
-    if severity:
-        return _CVSS_TO_LEVEL.get(severity.lower(), "note")
-    return "note"
+        if score >= policy.cvss_error:
+            level = "error"
+        elif score >= policy.cvss_warning:
+            level = "warning"
+        elif score >= policy.cvss_note:
+            level = "note"
+        else:
+            level = "none"
+    elif severity:
+        level = _CVSS_SEVERITY_TO_LEVEL.get(severity.lower(), "note")
+    else:
+        level = "note"
+
+    # PoC existence bumps low levels up to at least warning.
+    if policy.ssvc_poc_is_warning and vuln_meta.get("ssvc_exploitation") == "poc":
+        if level in ("note", "none"):
+            level = "warning"
+
+    return level
 
 
-def render_sarif(results: "list[AnalysisResult]") -> dict:
+def render_sarif(
+    results: "list[AnalysisResult]",
+    policy: SarifPolicy | None = None,
+) -> dict:
     """Convert a list of AnalysisResult objects to a SARIF 2.1.0 dict."""
+    if policy is None:
+        policy = SarifPolicy()
+
     rules = []
     sarif_results = []
 
     for result in results:
         cve = result.cve_record
         cve_id = result.cve_id
+        vuln_meta: dict = result.metadata.get("vulnrichment", {})
 
-        # Pick primary CVSS score
         score: float | None = None
         severity: str | None = None
         vector: str | None = None
@@ -60,7 +111,7 @@ def render_sarif(results: "list[AnalysisResult]") -> dict:
             severity = cve.primary_cvss.base_severity
             vector = cve.primary_cvss.vector_string
 
-        level = _cvss_score_to_level(score, severity)
+        level = _assign_level(score, severity, vuln_meta, policy)
 
         rule_entry: dict = {
             "id": cve_id,
@@ -79,6 +130,10 @@ def render_sarif(results: "list[AnalysisResult]") -> dict:
             rule_entry["properties"]["cvss_severity"] = severity
         if vector:
             rule_entry["properties"]["cvss_vector"] = vector
+        if vuln_meta.get("in_kev"):
+            rule_entry["properties"]["kev"] = True
+        if vuln_meta.get("ssvc_exploitation"):
+            rule_entry["properties"]["ssvc_exploitation"] = vuln_meta["ssvc_exploitation"]
 
         # ATT&CK technique IDs as tags
         technique_ids = [t.technique_id for t in result.attack_mapping.techniques]
@@ -94,6 +149,8 @@ def render_sarif(results: "list[AnalysisResult]") -> dict:
                 "text": (
                     f"{cve_id}"
                     + (f" — CVSS {score} ({severity.value if hasattr(severity, 'value') else severity})" if score is not None else "")
+                    + (f" [KEV]" if vuln_meta.get("in_kev") else "")
+                    + (f" [SSVC:{vuln_meta['ssvc_exploitation']}]" if vuln_meta.get("ssvc_exploitation") else "")
                     + f". ATT&CK: {', '.join(technique_ids) if technique_ids else 'none mapped'}."
                     + (f" {description[:256]}" if description else "")
                 ).strip()
