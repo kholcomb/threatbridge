@@ -1,5 +1,6 @@
 """Anthropic SDK wrapper for structured tool_use output."""
 
+import threading
 import time
 from typing import Any
 
@@ -13,6 +14,13 @@ class ClaudeError(Exception):
 
 
 class ClaudeClient:
+    # Class-level throttle shared across all instances and threads.
+    # Prevents batch workers from flooding the Anthropic API concurrently.
+    # Default: 10 req/s ceiling (0.1 s between calls). Tune via CLAUDE_MIN_INTERVAL_S.
+    _lock = threading.Lock()
+    _last_call: float = 0.0
+    _min_interval: float = 0.1
+
     def __init__(self) -> None:
         if not settings.has_anthropic_key:
             raise ClaudeError("ANTHROPIC_API_KEY is not set.")
@@ -27,6 +35,13 @@ class ClaudeClient:
         max_retries: int = 3,
     ) -> dict:
         """Call Claude with tool_use to get structured JSON output matching output_schema."""
+        with self._lock:
+            now = time.monotonic()
+            wait = self._min_interval - (now - self._last_call)
+            if wait > 0:
+                time.sleep(wait)
+            ClaudeClient._last_call = time.monotonic()
+
         last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:

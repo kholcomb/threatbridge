@@ -40,7 +40,13 @@ def map_cwe_to_attack(
         if tech:
             cwe_label = ", ".join(sources)
             rationale = f"{cwe_label} → {tid} (static map)"
-            tech = tech.model_copy(update={"confidence": 0.6, "rationale": rationale})
+            # Use per-entry confidence from the map; fall back to 0.6 if absent.
+            # Confidence values align with the Claude enricher's scale:
+            #   0.9 = unambiguous, 0.7 = standard class, 0.5 = plausible, 0.3 = speculative
+            base_confidence = max(
+                cwe_map[src].get("confidence", 0.6) for src in sources if src in cwe_map
+            )
+            tech = tech.model_copy(update={"confidence": base_confidence, "rationale": rationale})
             techniques.append(tech)
 
     return AttackMapping(

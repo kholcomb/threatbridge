@@ -1,202 +1,252 @@
 {
   "CWE-20": {
     "techniques": ["T1190"],
+    "confidence": 0.5,
     "notes": "Improper input validation — exploit public-facing application"
   },
   "CWE-22": {
     "techniques": ["T1083", "T1005"],
+    "confidence": 0.9,
     "notes": "Path traversal — file discovery, data from local system"
   },
   "CWE-23": {
     "techniques": ["T1083", "T1005"],
+    "confidence": 0.9,
     "notes": "Relative path traversal — file access outside intended directory"
   },
   "CWE-36": {
     "techniques": ["T1083", "T1005"],
+    "confidence": 0.9,
     "notes": "Absolute path traversal — direct file path access"
   },
   "CWE-59": {
     "techniques": ["T1083", "T1574"],
+    "confidence": 0.7,
     "notes": "Symlink following — file access, hijack execution flow"
   },
   "CWE-77": {
     "techniques": ["T1059", "T1190"],
+    "confidence": 0.9,
     "notes": "Command injection — command and scripting interpreter, exploit public-facing application"
   },
   "CWE-78": {
     "techniques": ["T1059", "T1190"],
+    "confidence": 0.9,
     "notes": "OS command injection — command execution, exploit public-facing application"
   },
   "CWE-79": {
     "techniques": ["T1189", "T1059.007"],
+    "confidence": 0.7,
     "notes": "XSS — drive-by compromise, JavaScript execution in browser"
   },
   "CWE-89": {
     "techniques": ["T1190"],
+    "confidence": 0.9,
     "notes": "SQL injection — exploit public-facing application, data exfiltration"
   },
   "CWE-90": {
     "techniques": ["T1190"],
+    "confidence": 0.7,
     "notes": "LDAP injection — exploit public-facing application, directory traversal"
   },
   "CWE-91": {
     "techniques": ["T1190"],
+    "confidence": 0.7,
     "notes": "XML injection — exploit public-facing application"
   },
   "CWE-94": {
     "techniques": ["T1059", "T1190"],
+    "confidence": 0.9,
     "notes": "Code injection — command and scripting interpreter, exploit public-facing"
   },
   "CWE-95": {
     "techniques": ["T1059"],
+    "confidence": 0.9,
     "notes": "Dynamic code evaluation — scripting interpreter misuse"
   },
   "CWE-98": {
     "techniques": ["T1190", "T1059.004"],
+    "confidence": 0.9,
     "notes": "PHP remote file inclusion — exploit public-facing app, Unix shell"
   },
   "CWE-113": {
     "techniques": ["T1189"],
+    "confidence": 0.7,
     "notes": "HTTP response splitting — drive-by compromise, session manipulation"
   },
   "CWE-119": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.7,
     "notes": "Buffer overflow — client-side execution, privilege escalation"
   },
   "CWE-120": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.9,
     "notes": "Classic buffer overflow — memory corruption, privilege escalation"
   },
   "CWE-121": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.9,
     "notes": "Stack-based buffer overflow — code execution via stack corruption"
   },
   "CWE-122": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.9,
     "notes": "Heap-based buffer overflow — heap corruption for code execution"
   },
   "CWE-125": {
     "techniques": ["T1005"],
+    "confidence": 0.7,
     "notes": "Out-of-bounds read — data disclosure, memory information leak"
   },
   "CWE-134": {
     "techniques": ["T1203", "T1059"],
+    "confidence": 0.9,
     "notes": "Uncontrolled format string — arbitrary code execution, information disclosure"
   },
   "CWE-190": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.7,
     "notes": "Integer overflow — leads to buffer overflow, privilege escalation"
   },
   "CWE-200": {
     "techniques": ["T1005", "T1083"],
+    "confidence": 0.7,
     "notes": "Information exposure — data from local system, file discovery"
   },
   "CWE-269": {
     "techniques": ["T1068", "T1078"],
+    "confidence": 0.7,
     "notes": "Improper privilege management — privilege escalation, valid accounts"
   },
   "CWE-276": {
     "techniques": ["T1083", "T1222"],
+    "confidence": 0.7,
     "notes": "Incorrect default permissions — file discovery, file and directory permissions modification"
   },
   "CWE-287": {
     "techniques": ["T1078", "T1190"],
+    "confidence": 0.9,
     "notes": "Improper authentication — valid accounts, exploit public-facing application"
   },
   "CWE-295": {
     "techniques": ["T1557"],
+    "confidence": 0.9,
     "notes": "Improper certificate validation — adversary-in-the-middle"
   },
   "CWE-306": {
     "techniques": ["T1078", "T1190"],
+    "confidence": 0.9,
     "notes": "Missing authentication — valid accounts, bypass authentication"
   },
   "CWE-307": {
     "techniques": ["T1110"],
+    "confidence": 0.9,
     "notes": "Improper restriction of excessive auth attempts — brute force"
   },
   "CWE-319": {
     "techniques": ["T1040"],
+    "confidence": 0.9,
     "notes": "Cleartext transmission — network sniffing"
   },
   "CWE-326": {
     "techniques": ["T1040"],
+    "confidence": 0.7,
     "notes": "Inadequate encryption strength — network sniffing, crypto attack"
   },
   "CWE-328": {
     "techniques": ["T1552"],
+    "confidence": 0.7,
     "notes": "Reversible one-way hash — credential theft via weak hashing"
   },
   "CWE-330": {
     "techniques": ["T1552"],
+    "confidence": 0.7,
     "notes": "Insufficient random values — cryptographic weaknesses"
   },
   "CWE-352": {
     "techniques": ["T1185"],
+    "confidence": 0.9,
     "notes": "CSRF — browser session hijacking"
   },
   "CWE-362": {
     "techniques": ["T1068"],
+    "confidence": 0.7,
     "notes": "Race condition — privilege escalation via TOCTOU"
   },
   "CWE-384": {
     "techniques": ["T1563", "T1185"],
+    "confidence": 0.9,
     "notes": "Session fixation — remote service session hijacking"
   },
   "CWE-400": {
     "techniques": ["T1498", "T1499"],
+    "confidence": 0.9,
     "notes": "Resource exhaustion — denial of service (network/endpoint)"
   },
   "CWE-416": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.9,
     "notes": "Use after free — memory corruption, code execution"
   },
   "CWE-434": {
     "techniques": ["T1190", "T1059"],
+    "confidence": 0.9,
     "notes": "Unrestricted file upload — exploit public-facing app, script execution"
   },
   "CWE-476": {
     "techniques": ["T1499"],
+    "confidence": 0.9,
     "notes": "NULL pointer dereference — denial of service"
   },
   "CWE-502": {
     "techniques": ["T1190", "T1059"],
+    "confidence": 0.9,
     "notes": "Deserialization of untrusted data — RCE via exploit public-facing app"
   },
   "CWE-601": {
     "techniques": ["T1189"],
+    "confidence": 0.7,
     "notes": "Open redirect — phishing, drive-by compromise"
   },
   "CWE-611": {
     "techniques": ["T1005", "T1190"],
+    "confidence": 0.9,
     "notes": "XXE injection — data from local system, exploit public-facing app"
   },
   "CWE-639": {
     "techniques": ["T1078"],
+    "confidence": 0.7,
     "notes": "IDOR — access via valid account parameter manipulation"
   },
   "CWE-732": {
     "techniques": ["T1083", "T1222"],
+    "confidence": 0.7,
     "notes": "Incorrect permission assignment — file permissions modification, discovery"
   },
   "CWE-787": {
     "techniques": ["T1203", "T1068"],
+    "confidence": 0.9,
     "notes": "Out-of-bounds write — memory corruption, code execution, privilege escalation"
   },
   "CWE-798": {
     "techniques": ["T1552.001"],
+    "confidence": 0.9,
     "notes": "Hard-coded credentials — credentials in files"
   },
   "CWE-862": {
     "techniques": ["T1078", "T1068"],
+    "confidence": 0.9,
     "notes": "Missing authorization — valid accounts, exploitation for privilege escalation"
   },
   "CWE-863": {
     "techniques": ["T1078"],
+    "confidence": 0.7,
     "notes": "Incorrect authorization — access via valid account with insufficient permission checks"
   },
   "CWE-918": {
     "techniques": ["T1090", "T1102"],
+    "confidence": 0.9,
     "notes": "SSRF — proxy access, web service abuse for internal network recon"
   }
 }
