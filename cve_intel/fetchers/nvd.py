@@ -12,6 +12,7 @@ from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Re
 
 NVD_BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+CVE_ID_PATTERN = CVE_PATTERN  # Alias for external consumers
 
 
 class NVDError(Exception):
@@ -52,11 +53,12 @@ class NVDFetcher:
 
     def _fetch_raw(self, cve_id: str) -> dict:
         params: dict[str, str] = {"cveId": cve_id}
+        headers: dict[str, str] = {}
         if settings.has_nvd_key:
-            params["apiKey"] = settings.nvd_api_key
+            headers["apiKey"] = settings.nvd_api_key
 
         try:
-            resp = self._session.get(NVD_BASE_URL, params=params, timeout=30)
+            resp = self._session.get(NVD_BASE_URL, params=params, headers=headers, timeout=30)
         except requests.RequestException as exc:
             raise NVDError(f"Network error fetching {cve_id}: {exc}") from exc
 

@@ -90,13 +90,13 @@ class AttackData:
             techniques[tech_id] = AttackTechnique(
                 technique_id=tech_id,
                 name=obj.get("name", ""),
-                description=description[:500],
+                description=description,
                 is_subtechnique=is_sub,
                 parent_id=parent_id,
                 tactics=tactic_list,
                 platforms=platforms,
                 data_sources=data_sources,
-                detection_notes=detection[:300],
+                detection_notes=detection,
                 url=url,
             )
 
@@ -124,12 +124,23 @@ class AttackData:
         return list(self._techniques.keys())
 
 
+_CACHED_ATTACK_DATA: "AttackData | None" = None
+
+
 def get_attack_data() -> AttackData:
-    """Return an AttackData instance, downloading the bundle if needed."""
+    """Return an AttackData instance, downloading the bundle if needed.
+
+    Caches the parsed data at module level so the 80 MB bundle is only
+    loaded and parsed once per process.
+    """
+    global _CACHED_ATTACK_DATA
+    if _CACHED_ATTACK_DATA is not None:
+        return _CACHED_ATTACK_DATA
     bundle_path = _resolve_bundle_path()
     if not bundle_path.exists():
         _download_bundle(bundle_path)
-    return AttackData(bundle_path)
+    _CACHED_ATTACK_DATA = AttackData(bundle_path)
+    return _CACHED_ATTACK_DATA
 
 
 def _resolve_bundle_path() -> Path:
@@ -149,7 +160,11 @@ def _download_bundle(dest: Path) -> None:
         raise AttackDataError(f"Failed to download ATT&CK bundle: {exc}") from exc
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as f:
-        for chunk in resp.iter_content(chunk_size=65536):
-            f.write(chunk)
+    try:
+        with dest.open("wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
     print("ATT&CK bundle downloaded.")

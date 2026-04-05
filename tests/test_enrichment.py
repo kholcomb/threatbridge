@@ -151,3 +151,55 @@ def test_ioc_extractor_vague_behavioral_ioc_is_extractable(mocker, sample_cve_re
     # Currently passes through — no enforcement of specificity at extraction layer.
     # Prompt grounding (IOC_EXTRACTOR_SYSTEM) is the primary control.
     assert len(bundle.behavioral) == 1
+
+
+# ---------------------------------------------------------------------------
+# Operator precedence fix: domain AND poc/exploit must both be true
+# ---------------------------------------------------------------------------
+
+def test_ioc_extractor_poc_url_without_domain_not_flagged(sample_cve_record):
+    """A URL containing 'poc' but with no resolvable domain must NOT be extracted as IOC.
+
+    The fix ensures 'domain and (...)' is evaluated correctly rather than
+    '(domain and "exploit") or "poc"', which would flag domainless PoC refs.
+    """
+    from cve_intel.models.cve import Reference
+    from cve_intel.enrichment.claude_client import ClaudeClient
+    from unittest.mock import MagicMock
+
+    # Patch a reference URL with "poc" in the path but no real domain
+    no_domain_ref = Reference(url="file:///poc/exploit_test", source="nvd", tags=[])
+    record = sample_cve_record.model_copy(update={"references": [no_domain_ref]})
+
+    mock_client = MagicMock(spec=ClaudeClient)
+    mock_client.complete_structured.return_value = {
+        "network_iocs": [], "file_iocs": [], "process_iocs": [], "behavioral_iocs": []
+    }
+
+    mapping = AttackMapping(cve_id=record.cve_id, techniques=[])
+    extractor = IOCExtractor(mock_client)
+    bundle = extractor.extract(record, mapping)
+
+    # URL has no valid netloc (domain), so it must NOT be flagged even though "poc" is present
+    assert all(ioc.value != "file:///poc/exploit_test" for ioc in bundle.network)
+
+
+def test_ioc_extractor_poc_url_with_domain_is_flagged(sample_cve_record):
+    """A URL with both a valid domain AND 'poc' in the path SHOULD be extracted."""
+    from cve_intel.models.cve import Reference
+    from cve_intel.enrichment.claude_client import ClaudeClient
+    from unittest.mock import MagicMock
+
+    poc_ref = Reference(url="https://attacker.example.com/poc/exploit.py", source="nvd", tags=[])
+    record = sample_cve_record.model_copy(update={"references": [poc_ref]})
+
+    mock_client = MagicMock(spec=ClaudeClient)
+    mock_client.complete_structured.return_value = {
+        "network_iocs": [], "file_iocs": [], "process_iocs": [], "behavioral_iocs": []
+    }
+
+    mapping = AttackMapping(cve_id=record.cve_id, techniques=[])
+    extractor = IOCExtractor(mock_client)
+    bundle = extractor.extract(record, mapping)
+
+    assert any(ioc.value == "https://attacker.example.com/poc/exploit.py" for ioc in bundle.network)

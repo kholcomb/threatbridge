@@ -1,6 +1,10 @@
 """Sigma rule generation with pySigma validation."""
 
+import logging
+
 from cve_intel.enrichment.claude_client import ClaudeClient
+
+logger = logging.getLogger(__name__)
 from cve_intel.enrichment.prompts import (
     SIGMA_GEN_SYSTEM,
     SIGMA_GEN_USER,
@@ -178,8 +182,8 @@ class SigmaGenerator:
             ])
             for issue in validator.validate_rules(col):
                 warnings.append(str(issue))
-        except Exception:
-            pass  # Degrade gracefully; custom checks below still run
+        except Exception as exc:
+            logger.warning("Sigma validation skipped for rule: %s", exc)  # Degrade gracefully; custom checks below still run
 
         # Custom specificity checks
         try:

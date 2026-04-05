@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -11,7 +10,7 @@ from cve_intel.enrichment.attack_enricher import AttackEnricher
 from cve_intel.enrichment.claude_client import ClaudeClient, ClaudeError
 from cve_intel.enrichment.ioc_extractor import IOCExtractor
 from cve_intel.fetchers.attack_data import AttackData, get_attack_data
-from cve_intel.fetchers.nvd import NVDFetcher
+from cve_intel.fetchers.nvd import NVDFetcher, CVE_ID_PATTERN
 from cve_intel.fetchers.vulnrichment import fetch_vulnrichment
 from cve_intel.generators.sigma_gen import SigmaGenerator
 from cve_intel.generators.snort_gen import SnortGenerator
@@ -23,7 +22,7 @@ from cve_intel.models.attack import AttackMapping
 from cve_intel.models.ioc import IOCBundle
 from cve_intel.models.rules import AnalysisResult, RuleBundle
 
-CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+CVE_PATTERN = CVE_ID_PATTERN  # Re-exported for backward compatibility
 
 RuleFormats = set[Literal["sigma", "yara", "snort", "suricata"]]
 
