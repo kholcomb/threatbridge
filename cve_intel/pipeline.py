@@ -12,6 +12,7 @@ from cve_intel.enrichment.claude_client import ClaudeClient, ClaudeError
 from cve_intel.enrichment.ioc_extractor import IOCExtractor
 from cve_intel.fetchers.attack_data import AttackData, get_attack_data
 from cve_intel.fetchers.nvd import NVDFetcher
+from cve_intel.fetchers.vulnrichment import fetch_vulnrichment
 from cve_intel.generators.sigma_gen import SigmaGenerator
 from cve_intel.generators.snort_gen import SnortGenerator
 from cve_intel.generators.suricata_gen import SuricataGenerator
@@ -52,6 +53,9 @@ def analyze(
     # Stage 2: NVD Fetch
     fetcher = NVDFetcher()
     cve_record = fetcher.fetch(cve_id)
+
+    # Stage 2b: CISA Vulnrichment (non-blocking — failure returns empty data)
+    vuln_context = fetch_vulnrichment(cve_id)
 
     # Stage 3: ATT&CK STIX Load
     if attack_data is None:
@@ -101,6 +105,22 @@ def analyze(
         ioc_bundle = IOCBundle(cve_id=cve_id)
         rule_bundle = RuleBundle(cve_id=cve_id)
 
+    # Apply Vulnrichment severity boost to all generated rules
+    severity_boost = vuln_context.suggested_severity_boost()
+    if severity_boost:
+        rule_bundle = _apply_severity_boost(rule_bundle, severity_boost)
+
+    vuln_meta: dict = {}
+    if vuln_context.available:
+        vuln_meta = {
+            "in_kev": vuln_context.in_kev,
+            "kev_date_added": vuln_context.kev_date_added,
+            "ssvc_exploitation": vuln_context.ssvc.exploitation,
+            "ssvc_automatable": vuln_context.ssvc.automatable,
+            "ssvc_technical_impact": vuln_context.ssvc.technical_impact,
+            "is_actively_exploited": vuln_context.is_actively_exploited,
+        }
+
     return AnalysisResult(
         cve_id=cve_id,
         cve_record=cve_record,
@@ -113,6 +133,7 @@ def analyze(
             "analyzed_at": datetime.now(timezone.utc).isoformat(),
             "enrichment_requested": enrich,
             "rule_formats_requested": sorted(rule_formats),
+            "vulnrichment": vuln_meta,
         },
     )
 
@@ -151,3 +172,24 @@ def _generate_rules(
             bundle.suricata_rules.append(rule)
 
     return bundle
+
+
+_SEVERITY_ORDER = ["informational", "low", "medium", "high", "critical"]
+
+
+def _apply_severity_boost(bundle: RuleBundle, minimum: str) -> RuleBundle:
+    """Upgrade rule severity to at least `minimum` based on exploitation context."""
+    min_idx = _SEVERITY_ORDER.index(minimum) if minimum in _SEVERITY_ORDER else 0
+
+    def boost(rule):
+        current = _SEVERITY_ORDER.index(rule.severity) if rule.severity in _SEVERITY_ORDER else 0
+        if current < min_idx:
+            return rule.model_copy(update={"severity": minimum})
+        return rule
+
+    return bundle.model_copy(update={
+        "sigma_rules": [boost(r) for r in bundle.sigma_rules],
+        "yara_rules": [boost(r) for r in bundle.yara_rules],
+        "snort_rules": [boost(r) for r in bundle.snort_rules],
+        "suricata_rules": [boost(r) for r in bundle.suricata_rules],
+    })

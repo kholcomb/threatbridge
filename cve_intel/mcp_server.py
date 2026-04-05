@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP, Context
 
 from cve_intel.fetchers.attack_data import get_attack_data, AttackData
 from cve_intel.fetchers.nvd import NVDFetcher
+from cve_intel.fetchers.vulnrichment import fetch_vulnrichment
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
 from cve_intel.mappers.cvss_to_attack import map_cvss_to_attack
 
@@ -144,6 +145,35 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict:
     return {
         "cve": record.model_dump(mode="json"),
         "attack_mapping": mapping.model_dump(mode="json"),
+    }
+
+
+@mcp.tool()
+def get_exploitation_context(cve_id: str, ctx: Context) -> dict:
+    """Fetch CISA Vulnrichment exploitation context for a CVE.
+
+    Returns KEV (Known Exploited Vulnerabilities) status and SSVC scores:
+    - in_kev: whether CISA has added this to the KEV catalog
+    - kev_date_added: date first added to KEV
+    - ssvc_exploitation: "active", "poc", or "none"
+    - ssvc_automatable: "yes" or "no"
+    - ssvc_technical_impact: "total" or "partial"
+    - is_actively_exploited: true if KEV or SSVC exploitation=active
+    - suggested_severity: "critical"/"high" if exploitation context warrants it, else null
+
+    Returns available=false if no Vulnrichment entry exists for this CVE.
+    """
+    data = fetch_vulnrichment(cve_id)
+    return {
+        "cve_id": data.cve_id,
+        "available": data.available,
+        "in_kev": data.in_kev,
+        "kev_date_added": data.kev_date_added,
+        "ssvc_exploitation": data.ssvc.exploitation,
+        "ssvc_automatable": data.ssvc.automatable,
+        "ssvc_technical_impact": data.ssvc.technical_impact,
+        "is_actively_exploited": data.is_actively_exploited,
+        "suggested_severity": data.suggested_severity_boost(),
     }
 
 
