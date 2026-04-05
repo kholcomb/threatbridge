@@ -399,3 +399,45 @@ def test_batch_triage_rate_limited_error_type(mocker, mock_attack_data):
 
     assert len(result["failed"]) == 1
     assert result["failed"][0]["error_type"] == "rate_limited"
+
+
+# ---------------------------------------------------------------------------
+# CPE version range merging
+# ---------------------------------------------------------------------------
+
+def test_triage_cve_merges_multiple_version_ranges():
+    """Two CPE entries for the same vendor:product must be merged into one
+    package entry whose version_ranges list contains both ranges."""
+    from cve_intel.models.cve import CPEMatch
+    from cve_intel.mcp_server import _parse_cpe_to_package
+
+    cpe_matches = [
+        CPEMatch(
+            criteria="cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*",
+            version_start_including="1.0",
+            version_end_excluding="2.0",
+            vulnerable=True,
+        ),
+        CPEMatch(
+            criteria="cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*",
+            version_start_including="3.0",
+            version_end_excluding="4.0",
+            vulnerable=True,
+        ),
+    ]
+
+    result = _parse_cpe_to_package(cpe_matches)
+
+    # Must be collapsed into a single package entry.
+    assert len(result) == 1
+    pkg = result[0]
+    assert pkg["vendor"] == "acme"
+    assert pkg["package"] == "widget"
+
+    ranges = pkg["version_ranges"]
+    assert len(ranges) == 2
+
+    start_values = {r["start_including"] for r in ranges}
+    end_values = {r["end_excluding"] for r in ranges}
+    assert start_values == {"1.0", "3.0"}
+    assert end_values == {"2.0", "4.0"}
