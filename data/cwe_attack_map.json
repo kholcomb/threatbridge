@@ -1,4 +1,8 @@
 {
+  "CWE-20": {
+    "techniques": ["T1190"],
+    "notes": "Improper input validation — exploit public-facing application"
+  },
   "CWE-22": {
     "techniques": ["T1083", "T1005"],
     "notes": "Path traversal — file discovery, data from local system"
@@ -14,6 +18,10 @@
   "CWE-59": {
     "techniques": ["T1083", "T1574"],
     "notes": "Symlink following — file access, hijack execution flow"
+  },
+  "CWE-77": {
+    "techniques": ["T1059", "T1190"],
+    "notes": "Command injection — command and scripting interpreter, exploit public-facing application"
   },
   "CWE-78": {
     "techniques": ["T1059", "T1190"],
@@ -82,6 +90,14 @@
   "CWE-200": {
     "techniques": ["T1005", "T1083"],
     "notes": "Information exposure — data from local system, file discovery"
+  },
+  "CWE-269": {
+    "techniques": ["T1068", "T1078"],
+    "notes": "Improper privilege management — privilege escalation, valid accounts"
+  },
+  "CWE-276": {
+    "techniques": ["T1083", "T1222"],
+    "notes": "Incorrect default permissions — file discovery, file and directory permissions modification"
   },
   "CWE-287": {
     "techniques": ["T1078", "T1190"],
@@ -170,6 +186,14 @@
   "CWE-798": {
     "techniques": ["T1552.001"],
     "notes": "Hard-coded credentials — credentials in files"
+  },
+  "CWE-862": {
+    "techniques": ["T1078", "T1068"],
+    "notes": "Missing authorization — valid accounts, exploitation for privilege escalation"
+  },
+  "CWE-863": {
+    "techniques": ["T1078"],
+    "notes": "Incorrect authorization — access via valid account with insufficient permission checks"
   },
   "CWE-918": {
     "techniques": ["T1090", "T1102"],

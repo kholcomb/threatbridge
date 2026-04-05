@@ -1,11 +1,14 @@
 """NVD REST API v2 client with caching and rate limiting."""
 
+import logging
 import re
 import diskcache
 import requests
 from datetime import datetime
 from typing import Any
 from dateutil import parser as dateutil_parser
+
+logger = logging.getLogger(__name__)
 
 from cve_intel.config import settings
 from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference
@@ -159,6 +162,9 @@ class NVDFetcher:
             try:
                 severity = CVSSSeverity(str(severity_raw).upper())
             except ValueError:
+                logger.warning(
+                    "Unrecognized CVSS severity %r, defaulting to MEDIUM", severity_raw
+                )
                 severity = CVSSSeverity.MEDIUM
 
         return CVSSData(

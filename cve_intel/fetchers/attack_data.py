@@ -1,10 +1,13 @@
 """MITRE ATT&CK STIX bundle loader with auto-download and caching."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 from cve_intel.config import settings
 from cve_intel.models.attack import AttackTechnique, AttackTactic
@@ -152,7 +155,7 @@ def _resolve_bundle_path() -> Path:
 
 
 def _download_bundle(dest: Path) -> None:
-    print(f"Downloading MITRE ATT&CK STIX bundle to {dest} (~80 MB)...")
+    logger.info("Downloading MITRE ATT&CK STIX bundle to %s (~80 MB)...", dest)
     try:
         resp = requests.get(ENTERPRISE_ATTACK_URL, timeout=120, stream=True)
         resp.raise_for_status()
@@ -167,4 +170,4 @@ def _download_bundle(dest: Path) -> None:
     except Exception:
         dest.unlink(missing_ok=True)
         raise
-    print("ATT&CK bundle downloaded.")
+    logger.info("ATT&CK bundle downloaded.")

@@ -55,9 +55,14 @@ def _parse_cpe_to_package(cpe_matches: list[CPEMatch]) -> list[dict]:
 
     CPE format: cpe:2.3:{part}:{vendor}:{product}:{version}:...
     part=a (application), o (os), h (hardware)
+
+    Multiple CPE entries for the same vendor:product (e.g. separate version
+    ranges) are merged into a single entry with a ``version_ranges`` list so
+    that no range information is lost.
     """
-    seen: set[str] = set()
-    result = []
+    # Ordered dict keyed by "vendor:product" — preserves insertion order and
+    # allows in-place mutation for range merging.
+    index: dict[str, dict] = {}
 
     for cpe in cpe_matches:
         if not cpe.vulnerable:
@@ -71,41 +76,42 @@ def _parse_cpe_to_package(cpe_matches: list[CPEMatch]) -> list[dict]:
         product = parts[4]
 
         key = f"{vendor}:{product}"
-        if key in seen:
-            # Merge version range into existing entry if needed
-            continue
-        seen.add(key)
 
-        # Ecosystem detection
-        vendor_lower = vendor.lower()
-        if any(vendor_lower.startswith(p) for p in _PYPI_VENDORS):
-            ecosystem = "pypi"
-        elif vendor_lower in _NPM_VENDORS or "node" in vendor_lower:
-            ecosystem = "npm"
-        elif "golang" in vendor_lower or "go." in vendor_lower:
-            ecosystem = "go"
-        elif part == "o":
-            ecosystem = "os"
-        else:
-            ecosystem = "generic"
-
-        # Version range
-        range_parts = []
+        # Build the version range dict for this CPE entry (only non-empty keys).
+        range_dict: dict[str, str] = {}
         if cpe.version_start_including:
-            range_parts.append(f">= {cpe.version_start_including}")
+            range_dict["start_including"] = cpe.version_start_including
         if cpe.version_end_excluding:
-            range_parts.append(f"< {cpe.version_end_excluding}")
-        elif cpe.version_end_including:
-            range_parts.append(f"<= {cpe.version_end_including}")
+            range_dict["end_excluding"] = cpe.version_end_excluding
+        if cpe.version_end_including:
+            range_dict["end_including"] = cpe.version_end_including
 
-        result.append({
-            "ecosystem": ecosystem,
-            "vendor": vendor,
-            "package": product,
-            "vulnerable_range": ", ".join(range_parts) if range_parts else None,
-        })
+        if key in index:
+            # Merge: append this range to the existing entry's list.
+            if range_dict:
+                index[key]["version_ranges"].append(range_dict)
+        else:
+            # First time we see this vendor:product — create the entry.
+            vendor_lower = vendor.lower()
+            if any(vendor_lower.startswith(p) for p in _PYPI_VENDORS):
+                ecosystem = "pypi"
+            elif vendor_lower in _NPM_VENDORS or "node" in vendor_lower:
+                ecosystem = "npm"
+            elif "golang" in vendor_lower or "go." in vendor_lower:
+                ecosystem = "go"
+            elif part == "o":
+                ecosystem = "os"
+            else:
+                ecosystem = "generic"
 
-    return result
+            index[key] = {
+                "ecosystem": ecosystem,
+                "vendor": vendor,
+                "package": product,
+                "version_ranges": [range_dict] if range_dict else [],
+            }
+
+    return list(index.values())
 
 
 def _compute_priority_tier(vuln: VulnrichmentData, cvss: CVSSData | None) -> str:
