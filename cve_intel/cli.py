@@ -1,6 +1,7 @@
 """CLI entry point for cve-intel."""
 
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -151,6 +152,19 @@ def analyze(
               help="Skip Claude enrichment.")
 @click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
               help="Comma-separated rule formats.")
+# SARIF policy options (only used when --format sarif)
+@click.option("--cvss-error", default=9.0, show_default=True, type=float,
+              help="[SARIF] Minimum CVSS score to assign level=error.")
+@click.option("--cvss-warning", default=7.0, show_default=True, type=float,
+              help="[SARIF] Minimum CVSS score to assign level=warning.")
+@click.option("--cvss-note", default=4.0, show_default=True, type=float,
+              help="[SARIF] Minimum CVSS score to assign level=note.")
+@click.option("--kev-is-error/--no-kev-is-error", default=True, show_default=True,
+              help="[SARIF] KEV-listed CVEs are always level=error.")
+@click.option("--ssvc-active-is-error/--no-ssvc-active-is-error", default=True, show_default=True,
+              help="[SARIF] CVEs with SSVC exploitation=active are always level=error.")
+@click.option("--ssvc-poc-is-warning/--no-ssvc-poc-is-warning", default=True, show_default=True,
+              help="[SARIF] CVEs with SSVC exploitation=poc are bumped to at least level=warning.")
 def batch(
     cve_ids_file: str,
     fmt: str,
@@ -158,6 +172,12 @@ def batch(
     workers: int,
     no_enrich: bool,
     rules: str,
+    cvss_error: float,
+    cvss_warning: float,
+    cvss_note: float,
+    kev_is_error: bool,
+    ssvc_active_is_error: bool,
+    ssvc_poc_is_warning: bool,
 ) -> None:
     """Analyse multiple CVEs from a newline-separated file."""
     import concurrent.futures
@@ -197,12 +217,23 @@ def batch(
     errors = []
 
     def _run(cid: str):
-        return pipeline.analyze(
-            cve_id=cid,
-            enrich=enrich,
-            rule_formats=rule_formats,
-            attack_data=attack_data,
-        )
+        from cve_intel.fetchers.nvd import NVDRateLimitError, NVDNotFoundError
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                return pipeline.analyze(
+                    cve_id=cid,
+                    enrich=enrich,
+                    rule_formats=rule_formats,
+                    attack_data=attack_data,
+                )
+            except NVDNotFoundError:
+                raise  # permanent — CVE doesn't exist, no point retrying
+            except NVDRateLimitError:
+                if attempt < max_attempts - 1:
+                    time.sleep(5 * 2 ** attempt)  # 5s, 10s
+                else:
+                    raise
 
     with Progress(
         SpinnerColumn(),
@@ -224,15 +255,29 @@ def batch(
                 try:
                     results.append(future.result())
                 except Exception as exc:
-                    errors.append((cid, str(exc)))
+                    errors.append((cid, exc))
 
     if errors:
-        for cid, err in errors:
-            err_console.print(f"[red]Error [{cid}]: {err}[/red]")
+        from cve_intel.fetchers.nvd import NVDRateLimitError, NVDNotFoundError
+        for cid, exc in errors:
+            if isinstance(exc, NVDNotFoundError):
+                err_console.print(f"[yellow]Skipped [{cid}]: not found in NVD[/yellow]")
+            elif isinstance(exc, NVDRateLimitError):
+                err_console.print(f"[red]Failed [{cid}]: NVD rate limit — retry with NVD_API_KEY or reduce --workers[/red]")
+            else:
+                err_console.print(f"[red]Error [{cid}]: {exc}[/red]")
 
     if fmt == "sarif":
-        from cve_intel.output.sarif_renderer import render_sarif
-        sarif_data = render_sarif(results)
+        from cve_intel.output.sarif_renderer import render_sarif, SarifPolicy
+        policy = SarifPolicy(
+            cvss_error=cvss_error,
+            cvss_warning=cvss_warning,
+            cvss_note=cvss_note,
+            kev_is_error=kev_is_error,
+            ssvc_active_is_error=ssvc_active_is_error,
+            ssvc_poc_is_warning=ssvc_poc_is_warning,
+        )
+        sarif_data = render_sarif(results, policy=policy)
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
             out_file = output_dir / "results.sarif.json"
@@ -366,7 +411,7 @@ def iocs(cve_id: str, no_enrich: bool, output: str | None) -> None:
 
 @cli.command()
 @click.argument("cve_id")
-@click.option("--rules", "-r", default="sigma,yara,snort", show_default=True,
+@click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
               help="Comma-separated rule formats to generate.")
 @click.option("--output", "-o", type=click.Path(), default=None,
               help="Write rule files to this directory.")

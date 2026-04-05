@@ -1,4 +1,6 @@
 .env
+# User-specific MCP config (local venv paths) — use .mcp.ci.json for CI
+.mcp.json
 __pycache__/
 *.pyc
 *.pyo
