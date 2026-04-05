@@ -330,18 +330,17 @@ def fetch(cve_id: str) -> None:
 
 @cli.command()
 @click.argument("cve_id")
-@click.option("--no-enrich", "no_enrich", is_flag=True, default=False)
 @click.option("--output", "-o", type=click.Path(), default=None,
               help="Write output to FILE instead of stdout.")
 @click.option("--format", "-f", "fmt", type=click.Choice(["text", "json"]),
               default="text", show_default=True)
-def map(cve_id: str, no_enrich: bool, output: str | None, fmt: str) -> None:
-    """Map CVE to ATT&CK techniques."""
+def map(cve_id: str, output: str | None, fmt: str) -> None:
+    """Map CVE to ATT&CK techniques (deterministic, no API key required)."""
     from cve_intel import pipeline
     import json as _json
 
     try:
-        result = pipeline.analyze(cve_id, enrich=not no_enrich, rule_formats=set(), extract_iocs=False)
+        result = pipeline.analyze(cve_id, enrich=False, rule_formats=set(), extract_iocs=False)
     except Exception as exc:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
