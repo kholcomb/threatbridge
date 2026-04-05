@@ -370,17 +370,15 @@ def map(cve_id: str, output: str | None, fmt: str) -> None:
 
 @cli.command()
 @click.argument("cve_id")
-@click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
-              help="Skip Claude enrichment (returns empty IOC list without error).")
 @click.option("--output", "-o", type=click.Path(), default=None,
               help="Write JSON output to FILE instead of stdout.")
-def iocs(cve_id: str, no_enrich: bool, output: str | None) -> None:
-    """Extract and display IOCs for a CVE."""
+def iocs(cve_id: str, output: str | None) -> None:
+    """Extract and display IOCs for a CVE (requires ANTHROPIC_API_KEY)."""
     import json as _json
     from cve_intel import pipeline
 
     try:
-        result = pipeline.analyze(cve_id, enrich=not no_enrich, rule_formats=set())
+        result = pipeline.analyze(cve_id, enrich=True, rule_formats=set())
     except Exception as exc:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
@@ -407,8 +405,6 @@ def iocs(cve_id: str, no_enrich: bool, output: str | None) -> None:
               help="Comma-separated rule formats to generate.")
 @click.option("--output", "-o", type=click.Path(), default=None,
               help="Write rule files to this directory.")
-@click.option("--no-enrich", "no_enrich", is_flag=True, default=False,
-              help="Skip Claude enrichment (no rules will be generated).")
 @click.option("--format", "-f", "fmt",
               type=click.Choice(["text", "json"]),
               default="text", show_default=True,
@@ -418,15 +414,15 @@ def iocs(cve_id: str, no_enrich: bool, output: str | None) -> None:
                   "(e.g. sigma/*.yml, yara/*.yar) when --output is given. "
                   "json: emits a single JSON blob containing all rules."
               ))
-def rules_cmd(cve_id: str, rules: str, output: str | None, no_enrich: bool, fmt: str) -> None:
-    """Generate detection rules for a CVE."""
+def rules_cmd(cve_id: str, rules: str, output: str | None, fmt: str) -> None:
+    """Generate detection rules for a CVE (requires ANTHROPIC_API_KEY)."""
     import json as _json
     from cve_intel import pipeline
     from cve_intel.output import json_renderer
 
     rule_formats = set(r.strip().lower() for r in rules.split(",") if r.strip())
     try:
-        result = pipeline.analyze(cve_id, enrich=not no_enrich, rule_formats=rule_formats)
+        result = pipeline.analyze(cve_id, enrich=True, rule_formats=rule_formats)
     except Exception as exc:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
