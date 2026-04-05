@@ -100,6 +100,13 @@ def analyze(
 
     _print_warnings(result.warnings)
 
+    if enrich and not result.enriched:
+        err_console.print(
+            "[red]Error:[/red] Enrichment was requested but failed. "
+            "IOCs and detection rules were not generated."
+        )
+        sys.exit(1)
+
     if fmt in ("text", "both"):
         text_renderer.render_text(result)
 
@@ -122,6 +129,11 @@ def analyze(
             console.print(f"[dim]Rule written to {rp}[/dim]")
     elif fmt == "json" and not output_dir:
         click.echo(json_renderer.render_json(result))
+    elif fmt == "both" and not output_dir:
+        err_console.print(
+            "[yellow]Warning:[/yellow] --format both requires --output to write JSON and rule files. "
+            "Only text output shown. Use --output DIR to save JSON and rules."
+        )
 
 
 @cli.command()
@@ -230,8 +242,11 @@ def batch(
             click.echo(_json.dumps(sarif_data, indent=2))
         return
 
+    enrichment_failures = 0
     for result in results:
         _print_warnings(result.warnings)
+        if enrich and not result.enriched:
+            enrichment_failures += 1
 
         if fmt == "text":
             text_renderer.render_text(result)
@@ -246,9 +261,10 @@ def batch(
             else:
                 click.echo(json_renderer.render_json(result))
 
-    console.print(
-        f"\n[green]Done.[/green] {len(results)} succeeded, {len(errors)} failed."
-    )
+    summary = f"\n[green]Done.[/green] {len(results)} succeeded, {len(errors)} failed."
+    if enrichment_failures:
+        summary += f" [yellow]{enrichment_failures} enrichment failure(s) — rules/IOCs not generated.[/yellow]"
+    console.print(summary)
 
 
 @cli.command()
