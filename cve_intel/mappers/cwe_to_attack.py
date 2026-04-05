@@ -1,17 +1,19 @@
 """Static CWE-ID to ATT&CK technique mapping."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 from cve_intel.fetchers.attack_data import AttackData
 from cve_intel.models.attack import AttackMapping, AttackTechnique
 
 _MAP_PATH = Path(__file__).parent.parent.parent / "data" / "cwe_attack_map.json"
-_cwe_map: Optional[dict] = None
+_cwe_map: dict[str, Any] | None = None
 
 
-def _load_map() -> dict:
+def _load_map() -> dict[str, Any]:
     global _cwe_map
     if _cwe_map is None:
         _cwe_map = json.loads(_MAP_PATH.read_text(encoding="utf-8"))

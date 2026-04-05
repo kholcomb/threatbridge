@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class SigmaHQResult:
             tags.extend(_RE_CVE_TAG.findall(rule.rule_text))
         return sorted(set(tags))
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
         return {
             "cve_id": self.cve_id,
             "found": self.found,
@@ -182,7 +183,7 @@ def fetch_community_rules(cve_id: str) -> SigmaHQResult:
     return result
 
 
-def compare_with_community(generated_rule_text: str, community: SigmaHQResult) -> dict:
+def compare_with_community(generated_rule_text: str, community: SigmaHQResult) -> dict[str, Any]:
     """Compare a generated Sigma rule against community rules.
 
     Returns a comparison dict highlighting key differences.
