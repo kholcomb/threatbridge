@@ -11,6 +11,11 @@ permissions:
   id-token: write             # OIDC cloud auth (Bedrock / Vertex) if used
   security-events: write      # upload-sarif to GitHub Security tab
 
+env:
+  # Pinned ATT&CK version — must match ATTACK_VERSION in cve_intel/fetchers/attack_data.py.
+  # Update both together when upgrading to a new ATT&CK release.
+  ATTACK_VERSION: "ATT&CK-v18.1"
+
 jobs:
   scan-and-triage:
     name: Scan → Gate → Narrative
@@ -29,13 +34,14 @@ jobs:
           python-version: "3.11"
 
       # -----------------------------------------------------------------------
-      - name: Restore cve-intel cache
+      # Cache only the ATT&CK STIX bundle — content is immutable at a pinned
+      # version tag so this is safe to cache indefinitely. NVD data is NOT
+      # cached; it is always fetched fresh to avoid stale vulnerability scores.
+      - name: Cache ATT&CK bundle
         uses: actions/cache@v4
         with:
-          path: ~/.cache/cve-intel
-          key: cve-intel-${{ runner.os }}-${{ hashFiles('requirements*.txt', 'pyproject.toml') }}
-          restore-keys: |
-            cve-intel-${{ runner.os }}-
+          path: ~/.cache/cve-intel/attack
+          key: attack-${{ env.ATTACK_VERSION }}
 
       # -----------------------------------------------------------------------
       - name: Install project dependencies
@@ -72,10 +78,11 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Deterministic gate: no AI, no external API calls beyond NVD.
-      # cve-intel batch fetches CVSS scores from NVD and emits SARIF 2.1.0.
-      # SARIF level mapping: error = CVSS >= 9.0, warning = 7.0-8.9, note = 4.0-6.9.
-      # The gate fails if any result has level=error (Critical severity).
-      # Skip if no CVEs were found.
+      # cve-intel batch fetches NVD and CISA Vulnrichment data and emits SARIF 2.1.0.
+      # Level assignment uses CVSS score, KEV status, and SSVC exploitation signals.
+      # Defaults: error = CVSS >= 9.0 OR KEV-listed OR SSVC exploitation=active.
+      # Override thresholds via SARIF_POLICY_ARGS repo variable (see batch --help).
+      # The gate fails if any result has level=error. Skip if no CVEs were found.
       - name: Deterministic SARIF gate
         if: env.FAIL_ON_CRITICAL != 'false'
         run: |
@@ -88,7 +95,8 @@ jobs:
           cve-intel batch cve-list.txt \
             --format sarif \
             --output sarif-results/ \
-            --no-enrich
+            --no-enrich \
+            ${{ vars.SARIF_POLICY_ARGS }}
 
           CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error")] | length' \
             sarif-results/results.sarif.json)
@@ -125,9 +133,19 @@ jobs:
         with:
           prompt: |
             The file cve-list.txt contains CVE IDs found by Grype in this pull request.
-            Use batch_triage_cves to assess them, cross-reference attack_requirements
-            against .security/deployment.yml, then post a PR comment with ranked
-            findings and concrete remediation steps per CVE.
+
+            Step 1 — Triage: call batch_triage_cves with every CVE ID in cve-list.txt.
+
+            Step 2 — Deployment context: if .security/deployment.yml exists, read it and
+              use it to qualify which attack vectors are relevant to this deployment.
+              If the file does not exist, skip deployment qualification entirely and note
+              that in the comment.
+
+            Step 3 — Post a PR comment with:
+              - A ranked table of findings (CRITICAL → LOW) with CVSS score and priority tier
+              - For each CRITICAL/HIGH: what the vulnerability enables, whether the attack
+                vector is relevant given the deployment context, and a concrete remediation step
+              - Any CVEs that were skipped (not found in NVD, reserved, etc.)
           github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--mcp-config .mcp.ci.json --max-turns 10"

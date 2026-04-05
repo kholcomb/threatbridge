@@ -15,8 +15,10 @@ logger = logging.getLogger(__name__)
 from cve_intel.config import settings
 from cve_intel.models.attack import AttackTechnique, AttackTactic
 
+ATTACK_VERSION = "ATT&CK-v18.1"
+_TAG = ATTACK_VERSION.replace("&", "%26")
 ENTERPRISE_ATTACK_URL = (
-    "https://raw.githubusercontent.com/mitre/cti/master/"
+    f"https://raw.githubusercontent.com/mitre/cti/{_TAG}/"
     "enterprise-attack/enterprise-attack.json"
 )
 
