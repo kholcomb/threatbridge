@@ -240,6 +240,9 @@ def batch(
                 output_dir.mkdir(parents=True, exist_ok=True)
                 path = json_renderer.write_json(result, output_dir)
                 console.print(f"[dim]Written: {path}[/dim]")
+                rule_paths = json_renderer.write_rules(result, output_dir / "rules")
+                for rp in rule_paths:
+                    console.print(f"[dim]Rule written to {rp}[/dim]")
             else:
                 click.echo(json_renderer.render_json(result))
 
