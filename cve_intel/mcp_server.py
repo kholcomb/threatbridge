@@ -353,13 +353,15 @@ def search_techniques(query: str, ctx: Context) -> list[dict]:
     attack_data: AttackData = ctx.request_context.lifespan_context["attack_data"]
     if attack_data is None:
         return {"error": "ATT&CK data unavailable — server failed to load bundle at startup"}
-    q = query.lower()
+    tokens = query.lower().split()
 
     matches = []
     for tid in attack_data.all_technique_ids:
         tech = attack_data.get_technique(tid)
-        if tech and (q in tech.name.lower() or q in tech.description.lower()):
-            matches.append(tech)
+        if tech:
+            haystack = tech.name.lower() + " " + tech.description.lower()
+            if all(token in haystack for token in tokens):
+                matches.append(tech)
         if len(matches) >= 10:
             break
 
