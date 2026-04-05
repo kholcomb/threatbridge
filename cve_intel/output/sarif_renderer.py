@@ -34,10 +34,8 @@ class SarifPolicy:
     CVSS thresholds are the baseline.  KEV and SSVC signals take priority —
     explicit exploitation evidence overrides a numeric score.
 
-    Defaults represent a reasonable starting point for most environments:
-    - KEV-listed CVEs are always errors (CISA mandates patching within 2 weeks).
-    - Actively exploited CVEs are always errors regardless of CVSS score.
-    - CVEs with a public PoC are bumped to at least warning.
+    Use SarifPolicy.from_preset() to start from a named preset, then
+    override individual fields as needed.
     """
 
     cvss_error: float = 9.0
@@ -46,6 +44,33 @@ class SarifPolicy:
     kev_is_error: bool = True
     ssvc_active_is_error: bool = True
     ssvc_poc_is_warning: bool = True
+
+    @classmethod
+    def from_preset(cls, preset: str) -> "SarifPolicy":
+        """Return a SarifPolicy initialised from a named preset.
+
+        Presets align with CVSS severity bands:
+          default — Critical=error, High=warning, Medium=note. KEV and SSVC
+                    active always escalate to error. PoC bumps to warning.
+          strict  — High+Critical=error. Same KEV/SSVC escalation. Zero
+                    tolerance for exploitable vulnerabilities.
+          lenient — Critical=error via CVSS only. No KEV/SSVC escalation.
+                    Pure score-based triage, no exploitation signal override.
+        """
+        presets: dict[str, dict] = {
+            "default": {},  # all dataclass defaults
+            "strict": {
+                "cvss_error": 7.0,
+            },
+            "lenient": {
+                "kev_is_error": False,
+                "ssvc_active_is_error": False,
+                "ssvc_poc_is_warning": False,
+            },
+        }
+        if preset not in presets:
+            raise ValueError(f"Unknown SARIF policy preset {preset!r}. Choose: {', '.join(presets)}")
+        return cls(**presets[preset])
 
 
 def _assign_level(

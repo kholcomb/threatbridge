@@ -50,6 +50,16 @@ def cli() -> None:
               help="Skip Claude enrichment (deterministic only, no API key needed).")
 @click.option("--force-refresh", "force_refresh", is_flag=True, default=False,
               help="Bypass the NVD cache and fetch live data, overwriting the cached entry.")
+@click.option("--sarif-policy", "sarif_policy",
+              type=click.Choice(["default", "strict", "lenient"]), default="default",
+              show_default=True,
+              help="[SARIF] Severity preset. strict=High+Critical→error, lenient=CVSS-only no KEV/SSVC escalation.")
+@click.option("--cvss-threshold", "cvss_threshold", type=float, default=None,
+              help="[SARIF] Override the CVSS score that triggers level=error (overrides preset).")
+@click.option("--no-kev-escalation", "no_kev_escalation", is_flag=True, default=False,
+              help="[SARIF] Disable KEV → error escalation (overrides preset).")
+@click.option("--no-ssvc-escalation", "no_ssvc_escalation", is_flag=True, default=False,
+              help="[SARIF] Disable SSVC active/poc escalation (overrides preset).")
 def analyze(
     cve_id: str,
     output: str | None,
@@ -57,6 +67,10 @@ def analyze(
     rules: str,
     no_enrich: bool,
     force_refresh: bool,
+    sarif_policy: str,
+    cvss_threshold: float | None,
+    no_kev_escalation: bool,
+    no_ssvc_escalation: bool,
 ) -> None:
     """Run full analysis pipeline on a single CVE ID.
 
@@ -112,9 +126,17 @@ def analyze(
         text_renderer.render_text(result)
 
     elif fmt == "sarif":
-        from cve_intel.output.sarif_renderer import render_sarif
+        from cve_intel.output.sarif_renderer import render_sarif, SarifPolicy
         import json as _json
-        sarif_data = render_sarif([result])
+        policy = SarifPolicy.from_preset(sarif_policy)
+        if cvss_threshold is not None:
+            policy.cvss_error = cvss_threshold
+        if no_kev_escalation:
+            policy.kev_is_error = False
+        if no_ssvc_escalation:
+            policy.ssvc_active_is_error = False
+            policy.ssvc_poc_is_warning = False
+        sarif_data = render_sarif([result], policy=policy)
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
             out_file = output_dir / "results.sarif.json"
@@ -149,19 +171,16 @@ def analyze(
               help="Skip Claude enrichment.")
 @click.option("--rules", "-r", default="sigma,yara,snort,suricata", show_default=True,
               help="Comma-separated rule formats.")
-# SARIF policy options (only used when --format sarif)
-@click.option("--cvss-error", default=9.0, show_default=True, type=float,
-              help="[SARIF] Minimum CVSS score to assign level=error.")
-@click.option("--cvss-warning", default=7.0, show_default=True, type=float,
-              help="[SARIF] Minimum CVSS score to assign level=warning.")
-@click.option("--cvss-note", default=4.0, show_default=True, type=float,
-              help="[SARIF] Minimum CVSS score to assign level=note.")
-@click.option("--kev-is-error/--no-kev-is-error", default=True, show_default=True,
-              help="[SARIF] KEV-listed CVEs are always level=error.")
-@click.option("--ssvc-active-is-error/--no-ssvc-active-is-error", default=True, show_default=True,
-              help="[SARIF] CVEs with SSVC exploitation=active are always level=error.")
-@click.option("--ssvc-poc-is-warning/--no-ssvc-poc-is-warning", default=True, show_default=True,
-              help="[SARIF] CVEs with SSVC exploitation=poc are bumped to at least level=warning.")
+@click.option("--sarif-policy", "sarif_policy",
+              type=click.Choice(["default", "strict", "lenient"]), default="default",
+              show_default=True,
+              help="[SARIF] Severity preset. strict=High+Critical→error, lenient=CVSS-only no KEV/SSVC escalation.")
+@click.option("--cvss-threshold", "cvss_threshold", type=float, default=None,
+              help="[SARIF] Override the CVSS score that triggers level=error (overrides preset).")
+@click.option("--no-kev-escalation", "no_kev_escalation", is_flag=True, default=False,
+              help="[SARIF] Disable KEV → error escalation (overrides preset).")
+@click.option("--no-ssvc-escalation", "no_ssvc_escalation", is_flag=True, default=False,
+              help="[SARIF] Disable SSVC active/poc escalation (overrides preset).")
 def batch(
     cve_ids_file: str,
     fmt: str,
@@ -169,12 +188,10 @@ def batch(
     workers: int,
     no_enrich: bool,
     rules: str,
-    cvss_error: float,
-    cvss_warning: float,
-    cvss_note: float,
-    kev_is_error: bool,
-    ssvc_active_is_error: bool,
-    ssvc_poc_is_warning: bool,
+    sarif_policy: str,
+    cvss_threshold: float | None,
+    no_kev_escalation: bool,
+    no_ssvc_escalation: bool,
 ) -> None:
     """Analyse multiple CVEs from a newline-separated file."""
     import concurrent.futures
@@ -266,14 +283,14 @@ def batch(
 
     if fmt == "sarif":
         from cve_intel.output.sarif_renderer import render_sarif, SarifPolicy
-        policy = SarifPolicy(
-            cvss_error=cvss_error,
-            cvss_warning=cvss_warning,
-            cvss_note=cvss_note,
-            kev_is_error=kev_is_error,
-            ssvc_active_is_error=ssvc_active_is_error,
-            ssvc_poc_is_warning=ssvc_poc_is_warning,
-        )
+        policy = SarifPolicy.from_preset(sarif_policy)
+        if cvss_threshold is not None:
+            policy.cvss_error = cvss_threshold
+        if no_kev_escalation:
+            policy.kev_is_error = False
+        if no_ssvc_escalation:
+            policy.ssvc_active_is_error = False
+            policy.ssvc_poc_is_warning = False
         sarif_data = render_sarif(results, policy=policy)
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
