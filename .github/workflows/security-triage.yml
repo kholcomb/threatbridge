@@ -48,16 +48,20 @@ jobs:
         run: pip install -e ".[dev]" --quiet
 
       # -----------------------------------------------------------------------
-      - name: Install Grype
-        uses: anchore/scan-action/download-grype@v3
+      - name: Preflight check
+        run: cve-intel doctor
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
+      # -----------------------------------------------------------------------
       - name: Run Grype vulnerability scan
-        run: |
-          grype dir:. \
-            --output json \
-            --file grype-results.json \
-            --only-fixed=false \
-            --add-cpes-if-none || true
+        uses: anchore/scan-action@v3
+        with:
+          path: "."
+          output-format: json
+          output-file: grype-results.json
+          fail-build: false
 
       # -----------------------------------------------------------------------
       # Extract CVE IDs from Grype output into a plain list.
