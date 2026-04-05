@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 from enum import Enum
 from datetime import datetime
-from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -17,14 +18,14 @@ class CVSSData(BaseModel):
     vector_string: str
     base_score: float
     base_severity: CVSSSeverity
-    attack_vector: Optional[str] = None
-    attack_complexity: Optional[str] = None
-    privileges_required: Optional[str] = None
-    user_interaction: Optional[str] = None
-    scope: Optional[str] = None
-    confidentiality_impact: Optional[str] = None
-    integrity_impact: Optional[str] = None
-    availability_impact: Optional[str] = None
+    attack_vector: str | None = None
+    attack_complexity: str | None = None
+    privileges_required: str | None = None
+    user_interaction: str | None = None
+    scope: str | None = None
+    confidentiality_impact: str | None = None
+    integrity_impact: str | None = None
+    availability_impact: str | None = None
 
 
 class Reference(BaseModel):
@@ -35,9 +36,9 @@ class Reference(BaseModel):
 
 class CPEMatch(BaseModel):
     criteria: str
-    version_start_including: Optional[str] = None
-    version_end_excluding: Optional[str] = None
-    version_end_including: Optional[str] = None
+    version_start_including: str | None = None
+    version_end_excluding: str | None = None
+    version_end_including: str | None = None
     vulnerable: bool = True
 
 
@@ -58,7 +59,7 @@ class CVERecord(BaseModel):
         return self.descriptions.get("en", "")
 
     @property
-    def primary_cvss(self) -> Optional[CVSSData]:
+    def primary_cvss(self) -> CVSSData | None:
         for ver in ("4.0", "3.1", "3.0", "2.0"):
             for c in self.cvss:
                 if c.version == ver:

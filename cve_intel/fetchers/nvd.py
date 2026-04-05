@@ -1,5 +1,7 @@
 """NVD REST API v2 client with caching and rate limiting."""
 
+from __future__ import annotations
+
 import logging
 import re
 import diskcache
@@ -54,7 +56,7 @@ class NVDFetcher:
         self._cache.set(cache_key, record.model_dump(mode="json"), expire=settings.cache_ttl_seconds)
         return record
 
-    def _fetch_raw(self, cve_id: str) -> dict:
+    def _fetch_raw(self, cve_id: str) -> dict[str, Any]:
         params: dict[str, str] = {"cveId": cve_id}
         headers: dict[str, str] = {}
         if settings.has_nvd_key:

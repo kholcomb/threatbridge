@@ -1,9 +1,10 @@
 """MITRE ATT&CK STIX bundle loader with auto-download and caching."""
 
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
 
 import requests
 
@@ -105,13 +106,13 @@ class AttackData:
 
         return techniques
 
-    def _get_external_id(self, obj: dict) -> Optional[str]:
+    def _get_external_id(self, obj: dict) -> str | None:
         for ref in obj.get("external_references", []):
             if ref.get("source_name") == "mitre-attack":
                 return ref.get("external_id")
         return None
 
-    def get_technique(self, technique_id: str) -> Optional[AttackTechnique]:
+    def get_technique(self, technique_id: str) -> AttackTechnique | None:
         return self._techniques.get(technique_id)
 
     def get_techniques_by_ids(self, ids: list[str]) -> list[AttackTechnique]:

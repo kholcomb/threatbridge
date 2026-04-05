@@ -1,4 +1,5 @@
-from typing import Optional
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
 
 
@@ -13,7 +14,7 @@ class AttackTechnique(BaseModel):
     name: str
     description: str = ""
     is_subtechnique: bool = False
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
     tactics: list[AttackTactic] = Field(default_factory=list)
     platforms: list[str] = Field(default_factory=list)
     data_sources: list[str] = Field(default_factory=list)
