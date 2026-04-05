@@ -26,19 +26,21 @@ def map_cwe_to_attack(
     attack_data: AttackData,
 ) -> AttackMapping:
     cwe_map = _load_map()
-    technique_ids: dict[str, float] = {}
+    technique_sources: dict[str, list[str]] = {}  # tid → [cwe_id, ...]
 
     for cwe_id in cwe_ids:
         entry = cwe_map.get(cwe_id)
         if entry:
             for tid in entry["techniques"]:
-                technique_ids[tid] = max(technique_ids.get(tid, 0.0), 0.6)
+                technique_sources.setdefault(tid, []).append(cwe_id)
 
     techniques: list[AttackTechnique] = []
-    for tid, confidence in technique_ids.items():
+    for tid, sources in technique_sources.items():
         tech = attack_data.get_technique(tid)
         if tech:
-            tech = tech.model_copy(update={"confidence": confidence, "rationale": f"Mapped from CWE (static map)"})
+            cwe_label = ", ".join(sources)
+            rationale = f"{cwe_label} → {tid} (static map)"
+            tech = tech.model_copy(update={"confidence": 0.6, "rationale": rationale})
             techniques.append(tech)
 
     return AttackMapping(

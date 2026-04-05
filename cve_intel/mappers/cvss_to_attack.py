@@ -5,21 +5,14 @@ from cve_intel.models.attack import AttackMapping, AttackTechnique
 from cve_intel.models.cve import CVSSData
 
 
-# (attack_vector, attack_complexity, privileges_required, scope_changed) -> [(tech_id, confidence)]
-_HEURISTICS: list[tuple[dict, list[tuple[str, float]]]] = [
-    # Network-facing, low complexity — likely public-facing exploit
-    ({"attack_vector": "NETWORK", "attack_complexity": "LOW"}, [("T1190", 0.5)]),
-    # Network-facing, adjacent — lateral movement or network service exploit
-    ({"attack_vector": "ADJACENT_NETWORK"}, [("T1210", 0.4)]),
-    # Scope change — privilege escalation is likely
-    ({"scope": "CHANGED"}, [("T1068", 0.4)]),
-    # Physical access required
-    ({"attack_vector": "PHYSICAL"}, [("T1200", 0.5)]),
-    # High integrity/confidentiality impact, no privileges — likely credential access
-    ({"privileges_required": "NONE", "confidentiality_impact": "HIGH"}, [("T1552", 0.3)]),
-    # Availability impact only — DoS
-    ({"availability_impact": "HIGH", "confidentiality_impact": "NONE", "integrity_impact": "NONE"},
-     [("T1499", 0.5)]),
+# (label, conditions) -> [(tech_id, confidence)]
+_HEURISTICS: list[tuple[str, dict, list[tuple[str, float]]]] = [
+    ("NETWORK + LOW complexity", {"attack_vector": "NETWORK", "attack_complexity": "LOW"}, [("T1190", 0.5)]),
+    ("ADJACENT_NETWORK vector", {"attack_vector": "ADJACENT_NETWORK"}, [("T1210", 0.4)]),
+    ("scope CHANGED", {"scope": "CHANGED"}, [("T1068", 0.4)]),
+    ("PHYSICAL access", {"attack_vector": "PHYSICAL"}, [("T1200", 0.5)]),
+    ("no privileges + HIGH confidentiality", {"privileges_required": "NONE", "confidentiality_impact": "HIGH"}, [("T1552", 0.3)]),
+    ("HIGH availability, no C/I impact", {"availability_impact": "HIGH", "confidentiality_impact": "NONE", "integrity_impact": "NONE"}, [("T1499", 0.5)]),
 ]
 
 
@@ -30,21 +23,22 @@ def map_cvss_to_attack(
     existing_ids: set[str],
 ) -> list[AttackTechnique]:
     """Return additional low-confidence technique hints based on CVSS attributes."""
-    hints: dict[str, float] = {}
+    hints: dict[str, tuple[float, str]] = {}  # tid → (confidence, label)
 
-    for conditions, mappings in _HEURISTICS:
+    for label, conditions, mappings in _HEURISTICS:
         if _matches(cvss, conditions):
             for tid, conf in mappings:
                 if tid not in existing_ids:
-                    hints[tid] = max(hints.get(tid, 0.0), conf)
+                    if conf > hints.get(tid, (0.0, ""))[0]:
+                        hints[tid] = (conf, label)
 
     techniques: list[AttackTechnique] = []
-    for tid, confidence in hints.items():
+    for tid, (confidence, label) in hints.items():
         tech = attack_data.get_technique(tid)
         if tech:
             tech = tech.model_copy(update={
                 "confidence": confidence,
-                "rationale": "CVSS vector heuristic (low confidence)",
+                "rationale": f"CVSS heuristic: {label} → {tid}",
             })
             techniques.append(tech)
 

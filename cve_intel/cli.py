@@ -357,7 +357,7 @@ def map(cve_id: str, output: str | None, fmt: str) -> None:
         f"Rationale: {m.rationale}\n",
     ]
     for t in m.techniques:
-        lines.append(f"  {t.technique_id:12} {t.name:40} conf={t.confidence:.0%}")
+        lines.append(f"  {t.technique_id:12} {t.name:40} conf={t.confidence:.0%}  [{t.rationale}]")
     text_out = "\n".join(lines)
 
     if output:
