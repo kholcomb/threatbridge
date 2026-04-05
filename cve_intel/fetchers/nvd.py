@@ -12,6 +12,7 @@ from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Re
 
 NVD_BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+CVE_ID_PATTERN = CVE_PATTERN  # Alias for external consumers
 
 
 class NVDError(Exception):
