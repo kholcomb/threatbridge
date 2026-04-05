@@ -1,0 +1,155 @@
+"""MITRE ATT&CK STIX bundle loader with auto-download and caching."""
+
+import json
+from pathlib import Path
+from typing import Any, Optional
+
+import requests
+
+from cve_intel.config import settings
+from cve_intel.models.attack import AttackTechnique, AttackTactic
+
+ENTERPRISE_ATTACK_URL = (
+    "https://raw.githubusercontent.com/mitre/cti/master/"
+    "enterprise-attack/enterprise-attack.json"
+)
+
+
+class AttackDataError(Exception):
+    pass
+
+
+class AttackData:
+    """Wrapper around MITRE ATT&CK STIX data providing technique lookups."""
+
+    def __init__(self, bundle_path: Path) -> None:
+        self._path = bundle_path
+        self._techniques: dict[str, AttackTechnique] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise AttackDataError(f"Failed to load ATT&CK bundle from {self._path}: {exc}") from exc
+
+        objects = raw.get("objects", [])
+        tactic_map = self._build_tactic_map(objects)
+        self._techniques = self._build_technique_map(objects, tactic_map)
+
+    def _build_tactic_map(self, objects: list[dict]) -> dict[str, AttackTactic]:
+        tactics: dict[str, AttackTactic] = {}
+        for obj in objects:
+            if obj.get("type") != "x-mitre-tactic":
+                continue
+            tactic_id = self._get_external_id(obj)
+            if tactic_id:
+                tactics[obj.get("x_mitre_shortname", "")] = AttackTactic(
+                    tactic_id=tactic_id,
+                    name=obj.get("name", ""),
+                    shortname=obj.get("x_mitre_shortname", ""),
+                )
+        return tactics
+
+    def _build_technique_map(
+        self, objects: list[dict], tactic_map: dict[str, AttackTactic]
+    ) -> dict[str, AttackTechnique]:
+        techniques: dict[str, AttackTechnique] = {}
+        for obj in objects:
+            if obj.get("type") != "attack-pattern":
+                continue
+            if obj.get("x_mitre_deprecated") or obj.get("revoked"):
+                continue
+
+            tech_id = self._get_external_id(obj)
+            if not tech_id:
+                continue
+
+            is_sub = "." in tech_id
+            parent_id = tech_id.split(".")[0] if is_sub else None
+
+            kill_chain_phases = obj.get("kill_chain_phases", [])
+            tactic_list = [
+                tactic_map[phase["phase_name"]]
+                for phase in kill_chain_phases
+                if phase.get("kill_chain_name") == "mitre-attack"
+                and phase.get("phase_name") in tactic_map
+            ]
+
+            platforms = obj.get("x_mitre_platforms", [])
+            data_sources = obj.get("x_mitre_data_sources", [])
+            detection = obj.get("x_mitre_detection", "")
+            description = obj.get("description", "")
+
+            url = ""
+            for ref in obj.get("external_references", []):
+                if ref.get("source_name") == "mitre-attack":
+                    url = ref.get("url", "")
+                    break
+
+            techniques[tech_id] = AttackTechnique(
+                technique_id=tech_id,
+                name=obj.get("name", ""),
+                description=description[:500],
+                is_subtechnique=is_sub,
+                parent_id=parent_id,
+                tactics=tactic_list,
+                platforms=platforms,
+                data_sources=data_sources,
+                detection_notes=detection[:300],
+                url=url,
+            )
+
+        return techniques
+
+    def _get_external_id(self, obj: dict) -> Optional[str]:
+        for ref in obj.get("external_references", []):
+            if ref.get("source_name") == "mitre-attack":
+                return ref.get("external_id")
+        return None
+
+    def get_technique(self, technique_id: str) -> Optional[AttackTechnique]:
+        return self._techniques.get(technique_id)
+
+    def get_techniques_by_ids(self, ids: list[str]) -> list[AttackTechnique]:
+        result = []
+        for tid in ids:
+            tech = self._techniques.get(tid)
+            if tech:
+                result.append(tech)
+        return result
+
+    @property
+    def all_technique_ids(self) -> list[str]:
+        return list(self._techniques.keys())
+
+
+def get_attack_data() -> AttackData:
+    """Return an AttackData instance, downloading the bundle if needed."""
+    bundle_path = _resolve_bundle_path()
+    if not bundle_path.exists():
+        _download_bundle(bundle_path)
+    return AttackData(bundle_path)
+
+
+def _resolve_bundle_path() -> Path:
+    if settings.attack_bundle_path and settings.attack_bundle_path.exists():
+        return settings.attack_bundle_path
+    cache_dir = settings.cache_dir / "attack"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "enterprise-attack.json"
+
+
+def _download_bundle(dest: Path) -> None:
+    print(f"Downloading MITRE ATT&CK STIX bundle to {dest} (~80 MB)...")
+    try:
+        resp = requests.get(ENTERPRISE_ATTACK_URL, timeout=120, stream=True)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise AttackDataError(f"Failed to download ATT&CK bundle: {exc}") from exc
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("wb") as f:
+        for chunk in resp.iter_content(chunk_size=65536):
+            f.write(chunk)
+    print("ATT&CK bundle downloaded.")

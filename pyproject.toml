@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cve-intel"
+version = "0.1.0"
+description = "CVE Threat Intelligence System — ATT&CK mapping, IOC extraction, and detection rule generation"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "requests>=2.32",
+    "requests-ratelimiter>=0.7",
+    "mitreattack-python>=3.0",
+    "stix2>=3.0",
+    "sigma-cli>=0.10",
+    "click>=8.1",
+    "rich>=13.7",
+    "diskcache>=5.6",
+    "cvss>=3.2",
+    "python-dateutil>=2.9",
+    "PyYAML>=6.0",
+    "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-mock>=3.14",
+    "responses>=0.25",
+]
+
+[project.scripts]
+cve-intel = "cve_intel.cli:cli"
+cve-intel-mcp = "cve_intel.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cve_intel*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-mock>=3.15.1",
+    "responses>=0.26.0",
+]

@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+cache/
+!cache/.gitkeep
+data/attack/
+!data/attack/.gitkeep
+*.json.bak
+.pytest_cache/
+.claude/
