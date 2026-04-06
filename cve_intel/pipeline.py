@@ -14,7 +14,8 @@ from cve_intel.enrichment.attack_enricher import AttackEnricher
 from cve_intel.enrichment.claude_client import ClaudeClient, ClaudeError
 from cve_intel.enrichment.ioc_extractor import IOCExtractor
 from cve_intel.fetchers.attack_data import AttackData, get_attack_data
-from cve_intel.fetchers.nvd import NVDFetcher, CVE_ID_PATTERN
+from cve_intel.fetchers.nvd import CVE_ID_PATTERN
+from cve_intel.fetchers.resolver import fetch_cve_record
 from cve_intel.fetchers.vulnrichment import fetch_vulnrichment
 from cve_intel.generators.sigma_gen import SigmaGenerator
 from cve_intel.generators.snort_gen import SnortGenerator
@@ -67,10 +68,9 @@ def analyze(
     if not CVE_PATTERN.match(cve_id):
         raise ValueError(f"Invalid CVE ID: {cve_id!r}")
 
-    # Stage 2: NVD Fetch
-    prog.advance("Fetching NVD record")
-    fetcher = NVDFetcher()
-    cve_record = fetcher.fetch(cve_id, force_refresh=force_refresh)
+    # Stage 2: CVE Fetch (NVD primary, OSV.dev fallback)
+    prog.advance("Fetching CVE record")
+    cve_record = fetch_cve_record(cve_id, force_refresh=force_refresh)
 
     # Stage 2b: CISA Vulnrichment (non-blocking — failure returns empty data)
     prog.advance("Fetching CISA Vulnrichment data")

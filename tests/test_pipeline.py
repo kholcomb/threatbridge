@@ -7,7 +7,7 @@ def test_pipeline_full_enriched(mocker, sample_cve_record, mock_attack_data):
     """End-to-end pipeline test with mocked NVD, ATT&CK, and Claude."""
     # Mock NVD fetcher
     mocker.patch(
-        "cve_intel.pipeline.NVDFetcher.fetch",
+        "cve_intel.pipeline.fetch_cve_record",
         return_value=sample_cve_record,
     )
     # Mock ATT&CK loader
@@ -78,7 +78,7 @@ def test_pipeline_full_enriched(mocker, sample_cve_record, mock_attack_data):
 
 def test_pipeline_no_enrich(mocker, sample_cve_record, mock_attack_data):
     """Pipeline without enrichment should skip Claude and produce empty IOC/rules."""
-    mocker.patch("cve_intel.pipeline.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.pipeline.fetch_cve_record", return_value=sample_cve_record)
     mocker.patch("cve_intel.pipeline.get_attack_data", return_value=mock_attack_data)
 
     from cve_intel.pipeline import analyze
@@ -93,7 +93,7 @@ def test_pipeline_no_enrich(mocker, sample_cve_record, mock_attack_data):
 
 def test_pipeline_claude_failure_degrades_gracefully(mocker, sample_cve_record, mock_attack_data):
     """If Claude is unavailable, pipeline should continue with deterministic output."""
-    mocker.patch("cve_intel.pipeline.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.pipeline.fetch_cve_record", return_value=sample_cve_record)
     mocker.patch("cve_intel.pipeline.get_attack_data", return_value=mock_attack_data)
 
     from cve_intel.enrichment.claude_client import ClaudeError

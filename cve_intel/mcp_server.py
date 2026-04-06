@@ -18,7 +18,9 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP, Context
 
 from cve_intel.fetchers.attack_data import get_attack_data, AttackData
-from cve_intel.fetchers.nvd import NVDFetcher, NVDError, NVDNotFoundError, NVDRateLimitError, CVE_ID_PATTERN
+from cve_intel.fetchers.nvd import NVDError, NVDNotFoundError, NVDRateLimitError, CVE_ID_PATTERN
+from cve_intel.fetchers.osv import OSVNotFoundError
+from cve_intel.fetchers.resolver import fetch_cve_record
 from cve_intel.fetchers.sigmahq import fetch_community_rules, compare_with_community
 from cve_intel.fetchers.vulnrichment import fetch_vulnrichment, VulnrichmentData
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
@@ -303,7 +305,7 @@ def _build_triage_notes(
 
 def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict[str, Any]:
     """Core triage logic shared by triage_cve and batch_triage_cves."""
-    record = NVDFetcher().fetch(cve_id)
+    record = fetch_cve_record(cve_id)
     vuln = fetch_vulnrichment(cve_id)
     cvss = record.primary_cvss
 
@@ -361,7 +363,7 @@ def fetch_cve(cve_id: str, ctx: Context) -> dict[str, Any]:
     """
     if not CVE_ID_PATTERN.match(cve_id.strip().upper()):
         return {"error": f"Invalid CVE ID format: {cve_id!r}. Expected format: CVE-YYYY-NNNNN"}
-    record = NVDFetcher().fetch(cve_id)
+    record = fetch_cve_record(cve_id)
     return record.model_dump(mode="json")
 
 
@@ -384,7 +386,7 @@ def get_attack_techniques(cve_id: str, ctx: Context) -> dict[str, Any]:
     attack_data: AttackData = ctx.request_context.lifespan_context["attack_data"]
     if attack_data is None:
         return {"error": "ATT&CK data unavailable — server failed to load bundle at startup"}
-    record = NVDFetcher().fetch(cve_id)
+    record = fetch_cve_record(cve_id)
 
     mapping = map_cwe_to_attack(cve_id, record.weaknesses, attack_data)
 
@@ -630,7 +632,7 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict[str, Any]:
     attack_data: AttackData = ctx.request_context.lifespan_context["attack_data"]
     if attack_data is None:
         return {"error": "ATT&CK data unavailable — server failed to load bundle at startup"}
-    record = NVDFetcher().fetch(cve_id)
+    record = fetch_cve_record(cve_id)
 
     mapping = map_cwe_to_attack(cve_id, record.weaknesses, attack_data)
 
@@ -749,7 +751,7 @@ def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict[str, Any]:
             continue
         try:
             results.append(_build_triage_result(cve_id, attack_data))
-        except NVDNotFoundError as exc:
+        except (NVDNotFoundError, OSVNotFoundError) as exc:
             failed.append({"cve_id": cve_id, "error": str(exc), "error_type": "not_found"})
         except NVDRateLimitError as exc:
             failed.append({"cve_id": cve_id, "error": str(exc), "error_type": "rate_limited"})

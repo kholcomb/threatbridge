@@ -18,7 +18,7 @@ def _make_ctx(attack_data):
 # ---------------------------------------------------------------------------
 
 def test_fetch_cve_returns_cve_dict(mocker, sample_cve_record):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     ctx = _make_ctx(None)
 
     from cve_intel.mcp_server import fetch_cve
@@ -32,7 +32,7 @@ def test_fetch_cve_returns_cve_dict(mocker, sample_cve_record):
 # ---------------------------------------------------------------------------
 
 def test_get_attack_techniques_returns_mapping(mocker, sample_cve_record, mock_attack_data):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     mock_attack_data.all_technique_ids = ["T1190", "T1068", "T1203"]
     ctx = _make_ctx(mock_attack_data)
 
@@ -98,7 +98,7 @@ def test_search_techniques_returns_empty_for_no_match(mock_attack_data):
 # ---------------------------------------------------------------------------
 
 def test_get_cve_summary_returns_combined(mocker, sample_cve_record, mock_attack_data):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     mock_attack_data.all_technique_ids = ["T1190", "T1068", "T1203"]
     ctx = _make_ctx(mock_attack_data)
 
@@ -307,7 +307,7 @@ def test_build_attack_requirements_auth_required_when_privileges_high():
 # ---------------------------------------------------------------------------
 
 def test_get_attack_techniques_returns_error_when_attack_data_none(mocker, sample_cve_record):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     ctx = _make_ctx(None)
 
     from cve_intel.mcp_server import get_attack_techniques
@@ -357,7 +357,7 @@ def test_triage_cve_empty_id_returns_error(mocker, mock_attack_data):
 
 
 def test_batch_triage_cves_mixed_ids(mocker, mock_attack_data, sample_cve_record):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=__import__(
         "cve_intel.fetchers.vulnrichment", fromlist=["VulnrichmentData"]
     ).VulnrichmentData(cve_id="CVE-2024-1234"))
@@ -380,7 +380,7 @@ def test_batch_triage_cves_mixed_ids(mocker, mock_attack_data, sample_cve_record
 
 def test_batch_triage_not_found_error_type(mocker, mock_attack_data):
     from cve_intel.fetchers.nvd import NVDNotFoundError
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", side_effect=NVDNotFoundError("not found"))
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", side_effect=NVDNotFoundError("not found"))
     ctx = _make_ctx(mock_attack_data)
 
     from cve_intel.mcp_server import batch_triage_cves
@@ -392,7 +392,7 @@ def test_batch_triage_not_found_error_type(mocker, mock_attack_data):
 
 def test_batch_triage_rate_limited_error_type(mocker, mock_attack_data):
     from cve_intel.fetchers.nvd import NVDRateLimitError
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", side_effect=NVDRateLimitError("rate limited"))
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", side_effect=NVDRateLimitError("rate limited"))
     ctx = _make_ctx(mock_attack_data)
 
     from cve_intel.mcp_server import batch_triage_cves
@@ -448,7 +448,7 @@ def test_triage_cve_merges_multiple_version_ranges():
 # ---------------------------------------------------------------------------
 
 def test_triage_cve_returns_dict(mocker, sample_cve_record, mock_attack_data):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=__import__(
         "cve_intel.fetchers.vulnrichment", fromlist=["VulnrichmentData"]
     ).VulnrichmentData(cve_id="CVE-2024-21762"))
@@ -468,7 +468,7 @@ def test_triage_cve_returns_dict(mocker, sample_cve_record, mock_attack_data):
 # ---------------------------------------------------------------------------
 
 def test_get_cve_summary_returns_error_when_attack_data_none(mocker, sample_cve_record):
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     ctx = _make_ctx(None)
 
     from cve_intel.mcp_server import get_cve_summary
@@ -522,7 +522,7 @@ def test_compare_sigma_rule_with_community_returns_error_when_attack_data_none(m
 
 def test_triage_then_lookup_technique_consistent(mocker, sample_cve_record, mock_attack_data):
     """triage_cve top technique ID resolves correctly via lookup_technique."""
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=__import__(
         "cve_intel.fetchers.vulnrichment", fromlist=["VulnrichmentData"]
     ).VulnrichmentData(cve_id="CVE-2024-21762"))
@@ -608,7 +608,7 @@ def test_full_tool_pipeline_fetch_then_triage(mocker, sample_cve_record, mock_at
     from cve_intel.mcp_server import fetch_cve, triage_cve
     from cve_intel.fetchers.vulnrichment import VulnrichmentData
 
-    mocker.patch("cve_intel.mcp_server.NVDFetcher.fetch", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
     mocker.patch(
         "cve_intel.mcp_server.fetch_vulnrichment",
         return_value=VulnrichmentData(cve_id="CVE-2024-21762"),
