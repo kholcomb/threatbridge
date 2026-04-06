@@ -402,6 +402,43 @@ def test_batch_triage_rate_limited_error_type(mocker, mock_attack_data):
     assert result["failed"][0]["error_type"] == "rate_limited"
 
 
+def test_batch_triage_summary_includes_failed_count(mocker, mock_attack_data):
+    from cve_intel.fetchers.nvd import NVDNotFoundError
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", side_effect=NVDNotFoundError("not found"))
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2099-00001", "CVE-2099-00002"], ctx)
+
+    assert result["summary"]["failed_count"] == 2
+
+
+def test_batch_triage_triage_notes_warn_on_failures(mocker, mock_attack_data):
+    from cve_intel.fetchers.nvd import NVDNotFoundError
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", side_effect=NVDNotFoundError("not found"))
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2099-99999"], ctx)
+
+    assert len(result["triage_notes"]) > 0
+    assert any("manual triage" in note for note in result["triage_notes"])
+
+
+def test_batch_triage_no_triage_notes_when_all_succeed(mocker, mock_attack_data, sample_cve_record):
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
+    mocker.patch("cve_intel.mcp_server.fetch_vulnrichment", return_value=VulnrichmentData(cve_id="CVE-2024-21762"))
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2024-21762"], ctx)
+
+    assert result["summary"]["failed_count"] == 0
+    assert result["triage_notes"] == []
+
+
 # ---------------------------------------------------------------------------
 # CPE version range merging
 # ---------------------------------------------------------------------------

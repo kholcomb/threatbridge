@@ -762,15 +762,23 @@ def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict[str, Any]:
 
     results.sort(key=lambda r: _PRIORITY_ORDER.get(r["priority_tier"], 99))
 
-    summary: dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    summary: dict[str, Any] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for r in results:
         tier = r["priority_tier"]
         summary[tier] = summary.get(tier, 0) + 1
+    summary["failed_count"] = len(failed)
+
+    triage_notes: list[str] = []
+    if failed:
+        triage_notes.append(
+            f"{len(failed)} CVE(s) could not be assessed — review the failed list for manual triage."
+        )
 
     return {
         "results": results,
         "failed": failed,
         "summary": summary,
+        "triage_notes": triage_notes,
     }
 
 
