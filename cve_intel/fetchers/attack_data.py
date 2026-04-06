@@ -43,7 +43,8 @@ class AttackData:
 
         objects = raw.get("objects", [])
         tactic_map = self._build_tactic_map(objects)
-        self._techniques = self._build_technique_map(objects, tactic_map)
+        ds_index = self._build_data_source_index(objects)
+        self._techniques = self._build_technique_map(objects, tactic_map, ds_index)
 
     def _build_tactic_map(self, objects: list[dict]) -> dict[str, AttackTactic]:
         tactics: dict[str, AttackTactic] = {}
@@ -59,8 +60,61 @@ class AttackData:
                 )
         return tactics
 
+    def _build_data_source_index(
+        self, objects: list[dict]
+    ) -> dict[str, set[str]]:
+        """Build a STIX attack-pattern ID → set of 'Source: Component' strings.
+
+        Traverses the ATT&CK v9+ relationship graph:
+          x-mitre-data-source  (parent, e.g. "Network Traffic")
+          x-mitre-data-component  (child, e.g. "Network Traffic Content")
+          relationship(detects): data-component → attack-pattern
+
+        Also preserves any labels for orphaned components (no parent source).
+        """
+        # Index data sources and components by their STIX ID
+        data_sources: dict[str, str] = {}    # stix_id → source name
+        data_components: dict[str, dict] = {}  # stix_id → component object
+
+        for obj in objects:
+            obj_type = obj.get("type", "")
+            if obj_type == "x-mitre-data-source":
+                data_sources[obj["id"]] = obj.get("name", "")
+            elif obj_type == "x-mitre-data-component":
+                data_components[obj["id"]] = obj
+
+        # Build component STIX ID → "Source: Component" label
+        component_labels: dict[str, str] = {}
+        for comp_id, comp in data_components.items():
+            component_name = comp.get("name", "")
+            source_ref = comp.get("x_mitre_data_source_ref", "")
+            if source_ref and source_ref in data_sources:
+                component_labels[comp_id] = f"{data_sources[source_ref]}: {component_name}"
+            else:
+                component_labels[comp_id] = component_name
+
+        # Traverse detects relationships to build technique → labels index
+        index: dict[str, set[str]] = {}
+        for obj in objects:
+            if obj.get("type") != "relationship":
+                continue
+            if obj.get("relationship_type") != "detects":
+                continue
+            if obj.get("x_mitre_deprecated") or obj.get("revoked"):
+                continue
+
+            source_ref = obj.get("source_ref", "")   # data component
+            target_ref = obj.get("target_ref", "")   # attack-pattern
+
+            label = component_labels.get(source_ref)
+            if label:
+                index.setdefault(target_ref, set()).add(label)
+
+        return index
+
     def _build_technique_map(
-        self, objects: list[dict], tactic_map: dict[str, AttackTactic]
+        self, objects: list[dict], tactic_map: dict[str, AttackTactic],
+        ds_index: dict[str, set[str]] | None = None,
     ) -> dict[str, AttackTechnique]:
         techniques: dict[str, AttackTechnique] = {}
         for obj in objects:
@@ -85,7 +139,10 @@ class AttackData:
             ]
 
             platforms = obj.get("x_mitre_platforms", [])
-            data_sources = obj.get("x_mitre_data_sources", [])
+            # Merge old flat list (pre-v9) with relationship-graph sources (v9+)
+            old_flat = obj.get("x_mitre_data_sources", [])
+            new_from_graph = sorted(ds_index.get(obj["id"], set())) if ds_index else []
+            data_sources = list(dict.fromkeys(old_flat + new_from_graph))
             detection = obj.get("x_mitre_detection", "")
             description = obj.get("description", "")
 
