@@ -25,6 +25,7 @@ from cve_intel.fetchers.sigmahq import fetch_community_rules, compare_with_commu
 from cve_intel.fetchers.vulnrichment import fetch_vulnrichment, VulnrichmentData
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
 from cve_intel.mappers.cvss_to_attack import map_cvss_to_attack
+from cve_intel.mappers.cvss_signals import extract_signals, rank_techniques
 from cve_intel.models.cve import CVSSData, CPEMatch
 
 logger = logging.getLogger(__name__)
@@ -320,9 +321,8 @@ def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict[str, Any]
                         "mapping_method": "cwe_static+cvss_heuristic"}
             )
 
-    top_techniques = sorted(
-        mapping.techniques, key=lambda t: t.confidence, reverse=True
-    )[:5]
+    signals = extract_signals(cvss) if cvss else None
+    top_techniques = rank_techniques(mapping.techniques, signals)[:5]
     techniques_out = [t.model_dump(mode="json") for t in top_techniques]
 
     priority = _compute_priority_tier(vuln, cvss)
