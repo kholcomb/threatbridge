@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 from cve_intel import __version__
 
 if TYPE_CHECKING:
-    from cve_intel.fetchers.scanner_input import ScannerFinding
+    from cve_intel.fetchers.scanner_input import ScannerFinding, VexDecision
     from cve_intel.models.rules import AnalysisResult
 
 
@@ -56,18 +56,31 @@ def render_vex(
     results: list[AnalysisResult],
     sarif_levels: dict[str, str] | None = None,
     findings: dict[str, ScannerFinding] | None = None,
+    prior_decisions: list[VexDecision] | None = None,
 ) -> dict:
     """Produce a CycloneDX 1.5 VEX document from triage results.
 
     Args:
-        results:      AnalysisResult objects from the pipeline.
-        sarif_levels: Optional dict of cve_id → SARIF level (error/warning/note/none)
-                      used to determine VEX analysis state. If omitted, all results
-                      are marked 'under_investigation'.
-        findings:     Optional dict of cve_id → ScannerFinding for package context.
+        results:         AnalysisResult objects from the pipeline.
+        sarif_levels:    Optional dict of cve_id → SARIF level used to determine
+                         VEX analysis state. If omitted, all results are marked
+                         'under_investigation'.
+        findings:        Optional dict of cve_id → ScannerFinding for package context.
+        prior_decisions: VexDecision list from a prior run (--vex-in). Entries with
+                         state 'not_affected' are written verbatim into the output VEX
+                         and are never overridden by fresh triage. This preserves team
+                         annotations across runs.
     """
     levels = sarif_levels or {}
     pkgs = findings or {}
+
+    # Index prior not_affected decisions — these are carried forward unchanged.
+    # Only humans can change a not_affected decision; the tool never overwrites them.
+    prior_not_affected: dict[str, VexDecision] = {
+        d.cve_id: d
+        for d in (prior_decisions or [])
+        if d.state == "not_affected"
+    }
 
     vulnerabilities = []
     for result in results:
@@ -132,11 +145,19 @@ def render_vex(
 
         vulnerabilities.append(vuln_entry)
 
+    # Append prior not_affected entries verbatim — raw preserves all team annotations.
+    # Skip any whose CVE ID was also in the fresh triage results (shouldn't happen
+    # since they were filtered before triage, but guard for safety).
+    triaged_ids = {r.cve_id for r in results}
+    for decision in prior_not_affected.values():
+        if decision.cve_id not in triaged_ids and decision.raw:
+            vulnerabilities.append(decision.raw)
+
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "version": 1,
-        "serialNumber": f"urn:uuid:cve-intel-vex",
+        "serialNumber": "urn:uuid:cve-intel-vex",
         "metadata": {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "tools": [{"name": "cve-intel", "version": __version__}],

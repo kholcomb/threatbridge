@@ -197,6 +197,12 @@ def analyze(
                   "results.vex.json (CycloneDX VEX) when --format sarif is set. "
                   "Writes one JSON file per CVE when --format json is set."
               ))
+@click.option("--vex-in", "vex_in", type=click.Path(exists=True), default=None,
+              help=(
+                  "CycloneDX VEX document from a prior run. CVEs with "
+                  "state=not_affected are excluded from triage and carried "
+                  "forward verbatim into the new VEX output."
+              ))
 @click.option("--fail-on", "fail_on",
               type=click.Choice(["error", "warning", "note", "never"]),
               default="never", show_default=True,
@@ -233,6 +239,7 @@ def batch(
     input_fmt: str,
     fmt: str,
     output: str | None,
+    vex_in: str | None,
     fail_on: str,
     workers: int | None,
     no_enrich: bool,
@@ -327,6 +334,20 @@ def batch(
         console.print("[yellow]No CVE IDs found in input.[/yellow]")
         return
 
+    # --- VEX re-ingestion: filter not_affected CVEs from prior run ---
+    prior_decisions: list = []
+    suppressed: set[str] = set()
+    if vex_in:
+        from cve_intel.fetchers.scanner_input import load_vex
+        prior_decisions = load_vex(Path(vex_in))
+        suppressed = {d.cve_id for d in prior_decisions if d.state == "not_affected"}
+        if suppressed:
+            cve_ids = [c for c in cve_ids if c not in suppressed]
+            console.print(
+                f"[dim]Skipped {len(suppressed)} not_affected CVE(s) from prior VEX: "
+                f"{', '.join(sorted(suppressed))}[/dim]"
+            )
+
     detected = f" ({len(scanner_findings)} with package context)" if scanner_findings else ""
     console.print(f"[dim]Loaded {len(cve_ids)} CVEs{detected}[/dim]")
 
@@ -418,7 +439,7 @@ def batch(
 
             # VEX written alongside SARIF automatically
             levels = assign_levels(results, policy=policy)
-            vex_data = render_vex(results, sarif_levels=levels, findings=scanner_findings or None)
+            vex_data = render_vex(results, sarif_levels=levels, findings=scanner_findings or None, prior_decisions=prior_decisions or None)
             vex_file = output_dir / "results.vex.json"
             vex_file.write_text(_json.dumps(vex_data, indent=2))
             console.print(f"[dim]VEX  written to {vex_file}[/dim]")

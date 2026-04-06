@@ -39,9 +39,52 @@ class ScannerFinding:
     ecosystem: str | None = None   # "maven", "npm", "pypi", etc. from pURL
 
 
+@dataclass
+class VexDecision:
+    """A single applicability decision from a CycloneDX VEX document."""
+    cve_id: str
+    state: str           # "affected" | "not_affected" | "fixed" | "under_investigation"
+    justification: str | None = None
+    detail: str | None = None
+    raw: dict | None = None   # original VEX vulnerability object, preserved verbatim
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def load_vex(path: Path) -> list[VexDecision]:
+    """Load a CycloneDX VEX document and return all vulnerability decisions.
+
+    Used with --vex-in to carry forward prior triage decisions.
+    Only not_affected entries are used for suppression; all entries are
+    returned so the caller can reconstruct the full prior state.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return parse_vex(data)
+
+
+def parse_vex(data: dict) -> list[VexDecision]:
+    """Extract vulnerability decisions from a CycloneDX VEX document.
+
+    Preserves the raw vulnerability object so not_affected entries can be
+    written verbatim into subsequent VEX output without loss of team annotations.
+    """
+    decisions: list[VexDecision] = []
+    for vuln in data.get("vulnerabilities", []):
+        cve_id = vuln.get("id", "")
+        if not _is_cve(cve_id):
+            continue
+        analysis = vuln.get("analysis", {})
+        decisions.append(VexDecision(
+            cve_id=cve_id.upper(),
+            state=analysis.get("state", "under_investigation"),
+            justification=analysis.get("justification"),
+            detail=analysis.get("detail"),
+            raw=vuln,
+        ))
+    return decisions
+
 
 def load_findings(path: Path, fmt: str = "auto") -> list[ScannerFinding]:
     """Load and parse a scanner report, returning deduplicated ScannerFindings.
