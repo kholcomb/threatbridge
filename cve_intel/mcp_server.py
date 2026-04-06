@@ -775,11 +775,21 @@ def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_community_sigma_rules(cve_id: str, ctx: Context) -> dict[str, Any]:
+def get_community_sigma_rules(
+    cve_id: str,
+    ctx: Context,
+    technique_ids: list[str] = [],
+) -> dict[str, Any]:
     """Fetch community Sigma rules for a CVE from the SigmaHQ/sigma repository.
 
-    Returns rules from rules-emerging-threats/{YEAR}/Exploits/{CVE_ID}/ if they exist.
-    Includes rule text, logsource details, and ATT&CK tags from the community rules.
+    First checks rules-emerging-threats/{YEAR}/Exploits/{CVE_ID}/ for a
+    CVE-specific rule.  If none is found and technique_ids are provided,
+    falls back to searching SigmaHQ for rules tagged with those ATT&CK
+    technique IDs (e.g. attack.t1190).
+
+    Pass technique_ids from a prior triage_cve or get_attack_techniques call
+    to enable the fallback — most CVEs lack a dedicated emerging-threats rule
+    but will have relevant technique-level rules.
 
     Use the result to:
     - Validate that your generated rule uses the correct logsource
@@ -787,9 +797,11 @@ def get_community_sigma_rules(cve_id: str, ctx: Context) -> dict[str, Any]:
     - Compare detection logic against a vetted baseline
     - Identify coverage gaps (e.g., community has 3 rules, you generated 1)
 
-    Returns found=false if no community rule exists for this CVE.
+    Returns found=false if no rules exist at either the CVE or technique level.
+    Check fallback_technique_ids in the result to see whether technique-level
+    rules were returned (non-empty) or CVE-specific rules were found (empty).
     """
-    result = fetch_community_rules(cve_id)
+    result = fetch_community_rules(cve_id, technique_ids=technique_ids or None)
     return result.summary()
 
 

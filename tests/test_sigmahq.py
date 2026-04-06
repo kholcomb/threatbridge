@@ -10,6 +10,8 @@ from cve_intel.fetchers.sigmahq import (
     SigmaHQResult,
     CommunityRule,
     _API_BASE,
+    _SEARCH_BASE,
+    _RAW_BASE,
 )
 
 
@@ -188,3 +190,173 @@ def test_fetch_retries_directory_listing_on_503():
     assert result.found is True
     assert len(result.rules) == 1
     assert call_count >= 2  # at least one retry of the directory listing
+
+
+# ---------------------------------------------------------------------------
+# Technique-level fallback
+# ---------------------------------------------------------------------------
+
+TECHNIQUE_SEARCH_RESULT = json.dumps({
+    "items": [
+        {"name": "net_exploit_public_app.yml", "path": "rules/network/net_exploit_public_app.yml"},
+    ]
+}).encode()
+
+TECHNIQUE_RULE = """\
+title: Exploit Public-Facing Application
+status: test
+logsource:
+  category: network
+  product: zeek
+detection:
+  selection:
+    event_type: http
+  condition: selection
+level: medium
+tags:
+  - attack.initial_access
+  - attack.t1190
+"""
+
+
+def test_technique_fallback_triggered_when_cve_not_found():
+    """When CVE path 404s and technique_ids given, falls back to code search."""
+    import urllib.error
+
+    def side_effect(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock = MagicMock()
+        mock.__enter__ = lambda s: s
+        mock.__exit__ = MagicMock(return_value=False)
+        if "api.github.com/search" in url:
+            mock.read.return_value = TECHNIQUE_SEARCH_RESULT
+            return mock
+        if "raw.githubusercontent.com" in url:
+            mock.read.return_value = TECHNIQUE_RULE.encode()
+            return mock
+        # CVE directory path → 404
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        with patch("time.sleep"):
+            result = fetch_community_rules(
+                "CVE-2024-21762", technique_ids=["T1190"]
+            )
+
+    assert result.found is True
+    assert len(result.rules) == 1
+    assert result.rules[0].filename == "net_exploit_public_app.yml"
+    assert result.fallback_technique_ids == ["T1190"]
+
+
+def test_technique_fallback_not_triggered_when_cve_found():
+    """When CVE-specific rules exist, technique fallback is never called."""
+    search_called = []
+
+    def side_effect(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock = MagicMock()
+        mock.__enter__ = lambda s: s
+        mock.__exit__ = MagicMock(return_value=False)
+        if "api.github.com/search" in url:
+            search_called.append(url)
+            mock.read.return_value = TECHNIQUE_SEARCH_RESULT
+            return mock
+        if "exploit_cve_2024_3400" in url:
+            mock.read.return_value = SAMPLE_RULE.encode()
+            return mock
+        # CVE directory listing
+        mock.read.return_value = DIR_LISTING
+        return mock
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        result = fetch_community_rules("CVE-2024-3400", technique_ids=["T1190"])
+
+    assert result.found is True
+    assert result.fallback_technique_ids == []
+    assert search_called == []  # search API never hit
+
+
+def test_technique_fallback_deduplicates_across_techniques():
+    """Same rule returned for two techniques appears only once."""
+    import urllib.error
+
+    def side_effect(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock = MagicMock()
+        mock.__enter__ = lambda s: s
+        mock.__exit__ = MagicMock(return_value=False)
+        if "api.github.com/search" in url:
+            mock.read.return_value = TECHNIQUE_SEARCH_RESULT  # same path for both techniques
+            return mock
+        if "raw.githubusercontent.com" in url:
+            mock.read.return_value = TECHNIQUE_RULE.encode()
+            return mock
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        with patch("time.sleep"):
+            result = fetch_community_rules(
+                "CVE-2024-21762", technique_ids=["T1190", "T1068"]
+            )
+
+    assert result.found is True
+    filenames = [r.filename for r in result.rules]
+    assert len(filenames) == len(set(filenames))  # no duplicates
+
+
+def test_technique_fallback_capped_at_max_ids(mocker):
+    """At most _TECHNIQUE_MAX_IDS techniques are searched."""
+    from cve_intel.fetchers import sigmahq as sig_module
+    import urllib.error
+
+    searched_tags = []
+
+    def side_effect(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock = MagicMock()
+        mock.__enter__ = lambda s: s
+        mock.__exit__ = MagicMock(return_value=False)
+        if "api.github.com/search" in url:
+            searched_tags.append(url)
+            mock.read.return_value = json.dumps({"items": []}).encode()
+            return mock
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    # Temporarily lower the cap so we don't need to pass 3+ real technique IDs
+    original = sig_module._TECHNIQUE_MAX_IDS
+    sig_module._TECHNIQUE_MAX_IDS = 2
+    try:
+        with patch("urllib.request.urlopen", side_effect=side_effect):
+            with patch("time.sleep"):
+                fetch_community_rules(
+                    "CVE-2099-99999",
+                    technique_ids=["T1190", "T1068", "T1203", "T1552"],
+                )
+    finally:
+        sig_module._TECHNIQUE_MAX_IDS = original
+
+    assert len(searched_tags) == 2
+
+
+def test_fallback_technique_ids_in_summary():
+    """fallback_technique_ids appears in the summary dict."""
+    import urllib.error
+
+    def side_effect(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock = MagicMock()
+        mock.__enter__ = lambda s: s
+        mock.__exit__ = MagicMock(return_value=False)
+        if "api.github.com/search" in url:
+            mock.read.return_value = json.dumps({"items": []}).encode()
+            return mock
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        with patch("time.sleep"):
+            result = fetch_community_rules("CVE-2099-99999", technique_ids=["T1190"])
+
+    summary = result.summary()
+    assert "fallback_technique_ids" in summary
+    assert summary["fallback_technique_ids"] == ["T1190"]

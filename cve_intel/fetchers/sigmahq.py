@@ -20,11 +20,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.github.com/repos/SigmaHQ/sigma/contents"
+_SEARCH_BASE = "https://api.github.com/search/code"
+_RAW_BASE = "https://raw.githubusercontent.com/SigmaHQ/sigma/main"
 _HEADERS = {
     "User-Agent": "cve-intel/0.1",
     "Accept": "application/vnd.github.v3+json",
 }
 _TIMEOUT = 10
+_TECHNIQUE_MAX_RESULTS = 5   # rules fetched per technique
+_TECHNIQUE_MAX_IDS = 3       # max techniques to search (GitHub rate limit: 10 req/min unauth)
 
 # Compiled regex patterns (module-level for efficiency)
 _RE_LOGSOURCE_BLOCK = re.compile(r'logsource:\s*\n((?:\s+\w[^\n]*\n)+)')
@@ -45,6 +49,9 @@ class SigmaHQResult:
     found: bool = False
     rules: list[CommunityRule] = field(default_factory=list)
     directory_url: str = ""
+    fallback_technique_ids: list[str] = field(default_factory=list)
+    """Technique IDs used for fallback search when no CVE-specific rule existed.
+    Empty when CVE-specific rules were found or no fallback was attempted."""
 
     @property
     def logsources(self) -> list[str]:
@@ -85,6 +92,7 @@ class SigmaHQResult:
             "attack_tags": self.attack_tags,
             "cve_tags": self.cve_tags,
             "directory_url": self.directory_url,
+            "fallback_technique_ids": self.fallback_technique_ids,
         }
 
 
@@ -93,10 +101,19 @@ _DIR_MAX_ATTEMPTS = 3
 _RULE_MAX_ATTEMPTS = 2       # single retry for individual rule fetches
 
 
-def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
+def fetch_community_rules(
+    cve_id: str,
+    github_token: str = "",
+    technique_ids: list[str] | None = None,
+) -> SigmaHQResult:
     """Fetch community Sigma rules for a CVE from SigmaHQ.
 
-    Returns a SigmaHQResult with found=False if no rules exist.
+    First checks rules-emerging-threats/{YEAR}/Exploits/{CVE_ID}/ for a
+    CVE-specific rule.  If none is found and technique_ids are provided,
+    falls back to a GitHub code search for rules tagged with those ATT&CK
+    technique IDs (e.g. "attack.t1190").
+
+    Returns a SigmaHQResult with found=False if nothing is found anywhere.
     Never raises — network failures return found=False.
     Retries the directory listing up to 3 times on transient errors with
     exponential backoff. Each individual rule fetch gets one retry (2 attempts).
@@ -107,6 +124,9 @@ def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
     Args:
         github_token: Optional GitHub personal access token. Raises the
             GitHub API rate limit from 60 to 5000 req/hr when provided.
+        technique_ids: Optional ATT&CK technique IDs (e.g. ["T1190", "T1068"])
+            used as a fallback when no CVE-specific rule exists.  At most
+            _TECHNIQUE_MAX_IDS techniques are searched to respect rate limits.
     """
     from cve_intel.config import settings
 
@@ -135,6 +155,7 @@ def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
     dir_req = urllib.request.Request(dir_url, headers=headers)
     last_exc: Exception | None = None
     files = None
+    _cve_path_done = False  # set on definitive non-5xx response; skip rule processing
     for attempt in range(_DIR_MAX_ATTEMPTS):
         if attempt > 0:
             time.sleep(_DIR_RETRY_DELAYS[attempt - 1])
@@ -148,61 +169,37 @@ def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
                 # 4xx — definitive answer, no retry
                 if exc.code != 404:
                     logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, exc)
-                return result
+                _cve_path_done = True
+                break
             last_exc = exc
         except Exception as exc:
             last_exc = exc
 
-    if files is None:
+    if files is None and not _cve_path_done:
         logger.warning("SigmaHQ directory listing failed for %s: %s", cve_id, last_exc)
-        return result
 
-    yml_files = [f for f in files if f.get("name", "").endswith(".yml")]
-    if not yml_files:
-        return result
+    if not _cve_path_done and files is not None:
+        yml_files = [f for f in files if f.get("name", "").endswith(".yml")]
+        if yml_files:
+            result.found = True
 
-    result.found = True
-    for file_meta in yml_files:
-        dl_url = file_meta.get("download_url", "")
-        if not dl_url:
-            continue
+    if result.found:
+        for file_meta in (files or []):
+            dl_url = file_meta.get("download_url", "")
+            if not dl_url:
+                continue
+            rule_text = _fetch_rule_text(dl_url, headers)
+            if rule_text is None:
+                continue
+            result.rules.append(CommunityRule(
+                filename=file_meta["name"],
+                rule_text=rule_text,
+                download_url=dl_url,
+            ))
 
-        # --- Individual rule fetch with single retry ---
-        rule_req = urllib.request.Request(dl_url, headers={"User-Agent": "cve-intel/0.1"})
-        rule_last_exc: Exception | None = None
-        rule_text: str | None = None
-        for attempt in range(_RULE_MAX_ATTEMPTS):
-            if attempt > 0:
-                time.sleep(1)
-            try:
-                with urllib.request.urlopen(rule_req, timeout=_TIMEOUT) as r:
-                    rule_text = r.read().decode()
-                rule_last_exc = None
-                break  # success
-            except urllib.error.HTTPError as exc:
-                if exc.code < 500:
-                    if exc.code != 404:
-                        logger.warning(
-                            "SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, exc
-                        )
-                    rule_last_exc = None  # definitive, don't log again below
-                    break
-                rule_last_exc = exc
-            except Exception as exc:
-                rule_last_exc = exc
-
-        if rule_text is None:
-            if rule_last_exc is not None:
-                logger.warning(
-                    "SigmaHQ rule fetch failed for %s (%s): %s", cve_id, dl_url, rule_last_exc
-                )
-            continue
-
-        result.rules.append(CommunityRule(
-            filename=file_meta["name"],
-            rule_text=rule_text,
-            download_url=dl_url,
-        ))
+    # --- Technique-level fallback when no CVE-specific rule was found ---
+    if not result.found and technique_ids:
+        result = _technique_fallback(cve_id, technique_ids, headers)
 
     if cache is not None and cache_key is not None and result.found:
         cache.set(cache_key, _result_to_dict(result), expire=settings.sigmahq_cache_ttl)
@@ -210,11 +207,90 @@ def fetch_community_rules(cve_id: str, github_token: str = "") -> SigmaHQResult:
     return result
 
 
+def _technique_fallback(
+    cve_id: str,
+    technique_ids: list[str],
+    headers: dict[str, str],
+) -> SigmaHQResult:
+    """Search SigmaHQ for rules tagged with ATT&CK technique IDs.
+
+    Searches at most _TECHNIQUE_MAX_IDS techniques, fetches up to
+    _TECHNIQUE_MAX_RESULTS rules each, and deduplicates by download URL.
+    Sleeps 1 second between technique searches to respect GitHub rate limits.
+    """
+    import urllib.parse
+
+    result = SigmaHQResult(cve_id=cve_id)
+    searched: list[str] = []
+    seen_urls: set[str] = set()
+    rules: list[CommunityRule] = []
+
+    for tid in technique_ids[:_TECHNIQUE_MAX_IDS]:
+        if searched:
+            time.sleep(1)  # stay inside GitHub rate limit window
+
+        tag = f"attack.{tid.lower()}"
+        query = f"{tag} repo:SigmaHQ/sigma extension:yml"
+        url = f"{_SEARCH_BASE}?q={urllib.parse.quote(query)}&per_page={_TECHNIQUE_MAX_RESULTS}"
+        req = urllib.request.Request(url, headers=headers)
+        searched.append(tid)
+
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+                data = json.loads(r.read())
+        except Exception as exc:
+            logger.warning("SigmaHQ technique search failed for %s: %s", tid, exc)
+            continue
+
+        for item in data.get("items", []):
+            path = item.get("path", "")
+            if not path:
+                continue
+            raw_url = f"{_RAW_BASE}/{path}"
+            if raw_url in seen_urls:
+                continue
+            seen_urls.add(raw_url)
+
+            rule_text = _fetch_rule_text(raw_url, headers)
+            if rule_text:
+                rules.append(CommunityRule(
+                    filename=item.get("name", path.split("/")[-1]),
+                    rule_text=rule_text,
+                    download_url=raw_url,
+                ))
+
+    result.fallback_technique_ids = searched
+    if rules:
+        result.found = True
+        result.rules = rules
+
+    return result
+
+
+def _fetch_rule_text(url: str, headers: dict[str, str]) -> str | None:
+    """Fetch a single rule file with one retry on transient errors."""
+    req = urllib.request.Request(url, headers={"User-Agent": headers.get("User-Agent", "cve-intel/0.1")})
+    for attempt in range(_RULE_MAX_ATTEMPTS):
+        if attempt > 0:
+            time.sleep(1)
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+                return r.read().decode()
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                return None
+        except Exception as exc:
+            if attempt == _RULE_MAX_ATTEMPTS - 1:
+                logger.warning("Rule fetch failed for %s: %s", url, exc)
+    return None
+
+
 def _result_to_dict(result: SigmaHQResult) -> dict:
     return {
         "cve_id": result.cve_id,
         "found": result.found,
         "directory_url": result.directory_url,
+        "fallback_technique_ids": result.fallback_technique_ids,
         "rules": [
             {"filename": r.filename, "rule_text": r.rule_text, "download_url": r.download_url}
             for r in result.rules
@@ -227,6 +303,7 @@ def _result_from_dict(d: dict) -> SigmaHQResult:
         cve_id=d["cve_id"],
         found=d["found"],
         directory_url=d.get("directory_url", ""),
+        fallback_technique_ids=d.get("fallback_technique_ids", []),
         rules=[
             CommunityRule(
                 filename=r["filename"],
