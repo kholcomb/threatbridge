@@ -63,18 +63,24 @@ class AttackData:
     def _build_data_source_index(
         self, objects: list[dict]
     ) -> dict[str, set[str]]:
-        """Build a STIX attack-pattern ID → set of 'Source: Component' strings.
+        """Build a STIX attack-pattern ID → set of data source label strings.
 
-        Traverses the ATT&CK v9+ relationship graph:
-          x-mitre-data-source  (parent, e.g. "Network Traffic")
-          x-mitre-data-component  (child, e.g. "Network Traffic Content")
-          relationship(detects): data-component → attack-pattern
+        Handles two ATT&CK schema generations:
 
-        Also preserves any labels for orphaned components (no parent source).
+        Old schema (v9–v14):
+          relationship(detects): x-mitre-data-component → attack-pattern
+          Labels formatted as "Source: Component" (e.g. "Network Traffic: Network Traffic Content")
+
+        New schema (v15+):
+          relationship(detects): x-mitre-detection-strategy → attack-pattern
+          x-mitre-detection-strategy.x_mitre_analytic_refs → x-mitre-analytic
+          x-mitre-analytic.x_mitre_log_source_references[].name → label string
+          (e.g. "ApplicationLog:IIS", "auditd:SYSCALL", "NSM:Flow")
         """
-        # Index data sources and components by their STIX ID
-        data_sources: dict[str, str] = {}    # stix_id → source name
-        data_components: dict[str, dict] = {}  # stix_id → component object
+        data_sources: dict[str, str] = {}          # stix_id → source name
+        data_components: dict[str, dict] = {}       # stix_id → component object
+        detection_strategies: dict[str, dict] = {}  # stix_id → strategy object
+        analytics: dict[str, dict] = {}             # stix_id → analytic object
 
         for obj in objects:
             obj_type = obj.get("type", "")
@@ -82,8 +88,12 @@ class AttackData:
                 data_sources[obj["id"]] = obj.get("name", "")
             elif obj_type == "x-mitre-data-component":
                 data_components[obj["id"]] = obj
+            elif obj_type == "x-mitre-detection-strategy":
+                detection_strategies[obj["id"]] = obj
+            elif obj_type == "x-mitre-analytic":
+                analytics[obj["id"]] = obj
 
-        # Build component STIX ID → "Source: Component" label
+        # Old schema: component STIX ID → "Source: Component" label
         component_labels: dict[str, str] = {}
         for comp_id, comp in data_components.items():
             component_name = comp.get("name", "")
@@ -93,7 +103,6 @@ class AttackData:
             else:
                 component_labels[comp_id] = component_name
 
-        # Traverse detects relationships to build technique → labels index
         index: dict[str, set[str]] = {}
         for obj in objects:
             if obj.get("type") != "relationship":
@@ -103,12 +112,28 @@ class AttackData:
             if obj.get("x_mitre_deprecated") or obj.get("revoked"):
                 continue
 
-            source_ref = obj.get("source_ref", "")   # data component
-            target_ref = obj.get("target_ref", "")   # attack-pattern
+            source_ref = obj.get("source_ref", "")
+            target_ref = obj.get("target_ref", "")  # attack-pattern stix id
 
-            label = component_labels.get(source_ref)
-            if label:
-                index.setdefault(target_ref, set()).add(label)
+            if source_ref.startswith("x-mitre-data-component"):
+                # Old schema path
+                label = component_labels.get(source_ref)
+                if label:
+                    index.setdefault(target_ref, set()).add(label)
+
+            elif source_ref.startswith("x-mitre-detection-strategy"):
+                # New schema path: walk strategy → analytics → log source names
+                strat = detection_strategies.get(source_ref)
+                if not strat:
+                    continue
+                for analytic_ref in strat.get("x_mitre_analytic_refs", []):
+                    analytic = analytics.get(analytic_ref)
+                    if not analytic:
+                        continue
+                    for ls_ref in analytic.get("x_mitre_log_source_references", []):
+                        name = ls_ref.get("name", "")
+                        if name:
+                            index.setdefault(target_ref, set()).add(name)
 
         return index
 

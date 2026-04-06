@@ -12,6 +12,25 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+_FAIL_ON_ORDER = ["error", "warning", "note", "none"]
+
+
+def _enforce_fail_on(fail_on: str, sarif_data: dict) -> None:
+    """Exit 1 if any SARIF result meets or exceeds the fail_on level threshold."""
+    if fail_on == "never":
+        return
+    threshold = _FAIL_ON_ORDER.index(fail_on)
+    for run in sarif_data.get("runs", []):
+        for result in run.get("results", []):
+            level = result.get("level", "none")
+            if level in _FAIL_ON_ORDER and _FAIL_ON_ORDER.index(level) <= threshold:
+                err_console.print(
+                    f"[red]Pipeline gate triggered:[/red] finding at level '{level}' "
+                    f"meets --fail-on '{fail_on}' threshold ({result.get('ruleId', '?')})"
+                )
+                sys.exit(1)
+
+
 def _print_warnings(warnings: list[str]) -> None:
     """Render pipeline warnings to stderr as a yellow panel."""
     if not warnings:
@@ -157,13 +176,36 @@ def analyze(
 
 
 @cli.command()
-@click.argument("cve_ids_file", type=click.Path(exists=True))
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("--from", "input_fmt",
+              type=click.Choice(["auto", "sarif", "cyclonedx", "ids"]),
+              default="auto", show_default=True,
+              help=(
+                  "Input format. "
+                  "'sarif' = SARIF 2.1.0 (Grype, Trivy, Snyk, Dependabot). "
+                  "'cyclonedx' = CycloneDX JSON vulnerability report. "
+                  "'ids' = plain newline-separated CVE IDs (legacy). "
+                  "'auto' detects SARIF/CycloneDX from file content; falls back to 'ids'."
+              ))
 @click.option("--format", "-f", "fmt",
               type=click.Choice(["text", "json", "sarif"]),
               default="text", show_default=True,
               help="Output format.")
 @click.option("--output", "-o", type=click.Path(), default=None,
-              help="Output directory. Writes one file per CVE (JSON/SARIF).")
+              help=(
+                  "Output directory. Writes results.sarif.json (SARIF) and "
+                  "results.vex.json (CycloneDX VEX) when --format sarif is set. "
+                  "Writes one JSON file per CVE when --format json is set."
+              ))
+@click.option("--fail-on", "fail_on",
+              type=click.Choice(["error", "warning", "note", "never"]),
+              default="never", show_default=True,
+              help=(
+                  "Exit with code 1 if any finding reaches this SARIF level or above. "
+                  "'error' = CRITICAL/KEV findings only. "
+                  "'warning' = HIGH findings and above. "
+                  "Use with --format sarif for GitHub, GitLab, and Azure DevOps gates."
+              ))
 @click.option("--workers", "-w", default=None, type=click.IntRange(1, 10),
               help=(
                   "Concurrent workers. "
@@ -187,9 +229,11 @@ def analyze(
 @click.option("--no-ssvc-escalation", "no_ssvc_escalation", is_flag=True, default=False,
               help="[SARIF] Disable SSVC active/poc escalation (overrides preset).")
 def batch(
-    cve_ids_file: str,
+    input_file: str,
+    input_fmt: str,
     fmt: str,
     output: str | None,
+    fail_on: str,
     workers: int | None,
     no_enrich: bool,
     rules: str,
@@ -198,12 +242,40 @@ def batch(
     no_kev_escalation: bool,
     no_ssvc_escalation: bool,
 ) -> None:
-    """Analyse multiple CVEs from a newline-separated file."""
+    """Analyse multiple CVEs from a scanner report or CVE ID list.
+
+    \b
+    Input formats (--from):
+      sarif      SARIF 2.1.0 — Grype, Trivy, Snyk, Semgrep, Dependabot
+      cyclonedx  CycloneDX JSON — Grype, Trivy, cdxgen, syft
+      ids        Plain newline-separated CVE IDs (legacy / manual lists)
+      auto       Detect from file content (default)
+
+    \b
+    CI/CD gate (--fail-on):
+      error    Exit 1 if any CRITICAL or KEV-listed finding
+      warning  Exit 1 if any HIGH finding or above
+      note     Exit 1 if any MEDIUM finding or above
+      never    Always exit 0 (default — report only)
+
+    \b
+    Output (--format sarif --output DIR):
+      results.sarif.json  SARIF 2.1.0  — upload to GitHub/GitLab/Azure DevOps
+      results.vex.json    CycloneDX VEX — applicability record for re-ingestion
+
+    GitHub Actions:
+      uses: github/codeql-action/upload-sarif@v3
+      with: { sarif_file: ./security-results/results.sarif.json }
+
+    GitLab (15.0+):
+      artifacts: { reports: { sast: results.sarif.json } }
+    """
     import concurrent.futures
     import json as _json
 
     from cve_intel import pipeline
     from cve_intel.config import settings as _settings
+    from cve_intel.fetchers.scanner_input import load_findings, ScannerFinding
 
     has_nvd_key = _settings.has_nvd_key
     if workers is None:
@@ -222,15 +294,41 @@ def batch(
     rule_formats = set(r.strip().lower() for r in rules.split(",") if r.strip())
     enrich = not no_enrich
     output_dir = Path(output) if output else None
+    input_path = Path(input_file)
 
-    cve_ids = [
-        line.strip()
-        for line in Path(cve_ids_file).read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    # --- Load input ---
+    scanner_findings: dict[str, ScannerFinding] = {}
+
+    if input_fmt == "ids":
+        # Legacy plain-text CVE ID list
+        cve_ids = [
+            line.strip()
+            for line in input_path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+    else:
+        # Try SARIF/CycloneDX (auto-detect or explicit)
+        try:
+            effective_fmt = input_fmt if input_fmt != "auto" else "auto"
+            findings_list = load_findings(input_path, fmt=effective_fmt)
+            scanner_findings = {f.cve_id: f for f in findings_list}
+            cve_ids = list(scanner_findings.keys())
+        except (ValueError, KeyError):
+            if input_fmt != "auto":
+                raise
+            # auto fallback: treat as plain CVE ID list
+            cve_ids = [
+                line.strip()
+                for line in input_path.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+
     if not cve_ids:
-        console.print("[yellow]No CVE IDs found in file.[/yellow]")
+        console.print("[yellow]No CVE IDs found in input.[/yellow]")
         return
+
+    detected = f" ({len(scanner_findings)} with package context)" if scanner_findings else ""
+    console.print(f"[dim]Loaded {len(cve_ids)} CVEs{detected}[/dim]")
 
     load_prog = RichProgress()
     load_prog.start()
@@ -298,7 +396,9 @@ def batch(
                 err_console.print(f"[red]Error [{cid}]: {exc}[/red]")
 
     if fmt == "sarif":
-        from cve_intel.output.sarif_renderer import render_sarif, SarifPolicy
+        from cve_intel.output.sarif_renderer import render_sarif, assign_levels, SarifPolicy
+        from cve_intel.output.vex_renderer import render_vex
+
         policy = SarifPolicy.from_preset(sarif_policy)
         if cvss_threshold is not None:
             policy.cvss_error = cvss_threshold
@@ -307,14 +407,26 @@ def batch(
         if no_ssvc_escalation:
             policy.ssvc_active_is_error = False
             policy.ssvc_poc_is_warning = False
-        sarif_data = render_sarif(results, policy=policy)
+
+        sarif_data = render_sarif(results, policy=policy, findings=scanner_findings or None)
+
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
-            out_file = output_dir / "results.sarif.json"
-            out_file.write_text(_json.dumps(sarif_data, indent=2))
-            console.print(f"[dim]SARIF written to {out_file}[/dim]")
+            sarif_file = output_dir / "results.sarif.json"
+            sarif_file.write_text(_json.dumps(sarif_data, indent=2))
+            console.print(f"[dim]SARIF written to {sarif_file}[/dim]")
+
+            # VEX written alongside SARIF automatically
+            levels = assign_levels(results, policy=policy)
+            vex_data = render_vex(results, sarif_levels=levels, findings=scanner_findings or None)
+            vex_file = output_dir / "results.vex.json"
+            vex_file.write_text(_json.dumps(vex_data, indent=2))
+            console.print(f"[dim]VEX  written to {vex_file}[/dim]")
         else:
             click.echo(_json.dumps(sarif_data, indent=2))
+
+        # --- CI gate ---
+        _enforce_fail_on(fail_on, sarif_data)
         return
 
     enrichment_failures = 0
@@ -340,6 +452,16 @@ def batch(
     if enrichment_failures:
         summary += f" [yellow]{enrichment_failures} enrichment failure(s) — rules/IOCs not generated.[/yellow]"
     console.print(summary)
+
+    # CI gate for non-SARIF formats (compute levels on the fly)
+    if fail_on != "never":
+        from cve_intel.output.sarif_renderer import assign_levels, SarifPolicy
+        policy = SarifPolicy.from_preset(sarif_policy)
+        sarif_like = {"runs": [{"results": [
+            {"ruleId": r.cve_id, "level": lv}
+            for r, lv in zip(results, assign_levels(results, policy).values())
+        ]}]}
+        _enforce_fail_on(fail_on, sarif_like)
 
 
 @cli.command()
@@ -394,7 +516,7 @@ def map(cve_id: str, output: str | None, fmt: str) -> None:
         f"Rationale: {m.rationale}\n",
     ]
     for t in m.techniques:
-        lines.append(f"  {t.technique_id:12} {t.name:40} conf={t.confidence:.0%}  [{t.rationale}]")
+        lines.append(f"  {t.technique_id:12} {t.name:40} source={t.mapping_source}  [{t.rationale}]")
     text_out = "\n".join(lines)
 
     if output:

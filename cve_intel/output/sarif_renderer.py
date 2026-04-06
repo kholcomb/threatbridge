@@ -7,7 +7,7 @@ Produces output compatible with the GitHub Security tab
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cve_intel import __version__
 
@@ -110,13 +110,46 @@ def _assign_level(
     return level
 
 
+def assign_levels(
+    results: "list[AnalysisResult]",
+    policy: SarifPolicy | None = None,
+) -> dict[str, str]:
+    """Return a dict of cve_id → SARIF level for a list of results.
+
+    Used by the VEX renderer to determine analysis state without re-running
+    the full SARIF render.
+    """
+    if policy is None:
+        policy = SarifPolicy()
+    out: dict[str, str] = {}
+    for result in results:
+        cve = result.cve_record
+        vuln_meta: dict = result.metadata.get("vulnrichment", {})
+        score = cve.primary_cvss.base_score if cve.primary_cvss else None
+        severity = cve.primary_cvss.base_severity if cve.primary_cvss else None
+        out[result.cve_id] = _assign_level(score, severity, vuln_meta, policy)
+    return out
+
+
 def render_sarif(
     results: "list[AnalysisResult]",
     policy: SarifPolicy | None = None,
+    findings: "dict[str, Any] | None" = None,
 ) -> dict:
-    """Convert a list of AnalysisResult objects to a SARIF 2.1.0 dict."""
+    """Convert a list of AnalysisResult objects to a SARIF 2.1.0 dict.
+
+    Args:
+        results:  AnalysisResult objects from the pipeline.
+        policy:   Severity assignment policy (default: SarifPolicy()).
+        findings: Optional dict of cve_id → ScannerFinding.  When provided,
+                  each result entry gains a populated 'locations' array (package
+                  name + installed version) and a 'fixes' array (fixed version).
+                  Compatible with GitHub Security tab, GitLab, and Azure DevOps.
+    """
     if policy is None:
         policy = SarifPolicy()
+
+    pkgs = findings or {}
 
     rules = []
     sarif_results = []
@@ -182,6 +215,36 @@ def render_sarif(
             },
             "locations": [],
         }
+
+        # Populate package location from scanner input when available
+        finding = pkgs.get(cve_id)
+        if finding and finding.package:
+            fqn = finding.package
+            if finding.installed_version:
+                fqn = f"{finding.package}:{finding.installed_version}"
+            result_entry["locations"] = [{
+                "logicalLocations": [{
+                    "name": finding.package,
+                    "fullyQualifiedName": fqn,
+                    "kind": "package",
+                }]
+            }]
+
+            # Fix version → SARIF fixes array (shown in GitHub Security tab)
+            if finding.fixed_version:
+                result_entry["fixes"] = [{
+                    "description": {
+                        "text": f"Upgrade {finding.package} to {finding.fixed_version}"
+                    },
+                    "artifactChanges": [{
+                        "artifactLocation": {"uri": finding.package},
+                        "replacements": [{
+                            "deletedRegion": {"startLine": 1, "endLine": 1},
+                            "insertedContent": {"text": finding.fixed_version},
+                        }]
+                    }]
+                }]
+
         sarif_results.append(result_entry)
 
     return {

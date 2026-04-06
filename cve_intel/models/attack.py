@@ -20,7 +20,7 @@ class AttackTechnique(BaseModel):
     data_sources: list[str] = Field(default_factory=list)
     detection_notes: str = ""
     url: str = ""
-    confidence: float = 0.5
+    mapping_source: str = "cwe_static"
     rationale: str = ""
 
 
@@ -29,6 +29,7 @@ class AttackMapping(BaseModel):
     techniques: list[AttackTechnique] = Field(default_factory=list)
     mapping_method: str = "deterministic"
     rationale: str = ""
+    unmapped_cwes: list[str] = Field(default_factory=list)
 
     @property
     def technique_ids(self) -> list[str]:

@@ -68,19 +68,85 @@ def rank_techniques(
     techniques: list[AttackTechnique],
     signals: CVSSSignals | None,
 ) -> list[AttackTechnique]:
-    """Sort techniques by (tactic_fit_score DESC, confidence DESC).
+    """Sort techniques by tactic_fit_score DESC, with CWE-derived techniques ranked above
+    CVSS-structural ones when scores are equal.
 
-    When signals is None (no CVSS data) falls back to confidence-only sort,
-    preserving existing behaviour.
+    When signals is None falls back to source-priority sort only.
     """
-    if signals is None:
-        return sorted(techniques, key=lambda t: t.confidence, reverse=True)
+    _SOURCE_PRIORITY = {"cwe_static": 1, "claude_enriched": 0}
 
-    return sorted(
-        techniques,
-        key=lambda t: (_tactic_fit_score(t, signals), t.confidence),
-        reverse=True,
-    )
+    def _key(t: AttackTechnique) -> tuple[int, int]:
+        fit = _tactic_fit_score(t, signals) if signals else 0
+        src = _SOURCE_PRIORITY.get(t.mapping_source, -1)
+        return (fit, src)
+
+    return sorted(techniques, key=_key, reverse=True)
+
+
+def add_structural_techniques(
+    cve_id: str,
+    cvss: "CVSSData",
+    attack_data: "AttackData",
+    existing_ids: set[str],
+) -> list[AttackTechnique]:
+    """Add techniques structurally implied by CVSS vector — no guessing, no probabilities.
+
+    Each gate is a precise CVSS condition that unambiguously implies the technique:
+
+      AV:N (not pure DoS) → T1190  Exploit Public-Facing Application
+      AV:A               → T1210  Exploitation of Remote Services
+      AV:P               → T1200  Hardware Additions
+      A:H + C:N + I:N    → T1499  Endpoint Denial of Service
+
+    Removed heuristics from the old cvss_to_attack.py:
+      scope CHANGED → T1068  (wrong: scope change ≠ privilege escalation)
+      PR:N + C:H    → T1552  (wrong: unauthenticated RCE ≠ credential theft)
+    """
+    from cve_intel.fetchers.attack_data import AttackData  # avoid circular at module level
+    from cve_intel.models.cve import CVSSData  # noqa: F401
+
+    def _is_pure_dos(c: "CVSSData") -> bool:
+        return (
+            c.availability_impact == "HIGH"
+            and c.confidentiality_impact in (None, "NONE")
+            and c.integrity_impact in (None, "NONE")
+        )
+
+    gates: list[tuple[bool, str, str]] = [
+        # (condition, technique_id, rationale)
+        (
+            cvss.attack_vector == "NETWORK" and not _is_pure_dos(cvss),
+            "T1190",
+            "AV:N with no CWE-derived Initial Access technique",
+        ),
+        (
+            cvss.attack_vector == "ADJACENT_NETWORK",
+            "T1210",
+            "AV:A — exploit requires adjacent network position",
+        ),
+        (
+            cvss.attack_vector == "PHYSICAL",
+            "T1200",
+            "AV:P — exploit requires physical device access",
+        ),
+        (
+            _is_pure_dos(cvss),
+            "T1499",
+            "Impact profile A:H/C:N/I:N — availability-only, denial of service",
+        ),
+    ]
+
+    techniques: list[AttackTechnique] = []
+    for condition, tid, rationale in gates:
+        if condition and tid not in existing_ids:
+            tech = attack_data.get_technique(tid)
+            if tech:
+                techniques.append(tech.model_copy(update={
+                    "mapping_source": f"cvss_{cvss.attack_vector.lower()}_vector"
+                    if tid not in ("T1499",) else "cvss_dos_impact",
+                    "rationale": rationale,
+                }))
+    return techniques
 
 
 # ---------------------------------------------------------------------------

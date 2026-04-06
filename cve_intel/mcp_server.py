@@ -24,8 +24,7 @@ from cve_intel.fetchers.resolver import fetch_cve_record
 from cve_intel.fetchers.sigmahq import fetch_community_rules, compare_with_community
 from cve_intel.fetchers.vulnrichment import fetch_vulnrichment, VulnrichmentData
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
-from cve_intel.mappers.cvss_to_attack import map_cvss_to_attack
-from cve_intel.mappers.cvss_signals import extract_signals, rank_techniques
+from cve_intel.mappers.cvss_signals import extract_signals, rank_techniques, add_structural_techniques
 from cve_intel.models.cve import CVSSData, CPEMatch
 
 logger = logging.getLogger(__name__)
@@ -312,20 +311,27 @@ def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict[str, Any]
 
     mapping = map_cwe_to_attack(cve_id, record.weaknesses, attack_data)
     if cvss:
-        extra = map_cvss_to_attack(
-            cve_id, cvss, attack_data, set(mapping.technique_ids)
-        )
+        extra = add_structural_techniques(cve_id, cvss, attack_data, set(mapping.technique_ids))
         if extra:
-            mapping = mapping.model_copy(
-                update={"techniques": mapping.techniques + extra,
-                        "mapping_method": "cwe_static+cvss_heuristic"}
-            )
+            mapping = mapping.model_copy(update={"techniques": mapping.techniques + extra})
 
     signals = extract_signals(cvss) if cvss else None
     top_techniques = rank_techniques(mapping.techniques, signals)[:5]
     techniques_out = [t.model_dump(mode="json") for t in top_techniques]
 
     priority = _compute_priority_tier(vuln, cvss)
+    triage_notes = _build_triage_notes(vuln, cvss, techniques_out)
+
+    if mapping.unmapped_cwes:
+        triage_notes.append(
+            f"ATT&CK mapping incomplete: {', '.join(mapping.unmapped_cwes)} not in static map — "
+            "technique list may be partial; run cve-intel analyze with enrichment for full coverage"
+        )
+    if not techniques_out:
+        if not record.weaknesses:
+            triage_notes.append(
+                "No ATT&CK mapping: no CWE data available for this CVE"
+            )
 
     return {
         "cve_id": cve_id,
@@ -343,7 +349,7 @@ def _build_triage_result(cve_id: str, attack_data: AttackData) -> dict[str, Any]
         "impact_scope": _build_impact_scope(cvss),
         "affected_packages": _parse_cpe_to_package(record.cpe_matches),
         "techniques": techniques_out,
-        "triage_notes": _build_triage_notes(vuln, cvss, techniques_out),
+        "triage_notes": triage_notes,
         "description": record.description_en[:500] if record.description_en else "",
     }
 
@@ -372,10 +378,10 @@ def get_attack_techniques(cve_id: str, ctx: Context) -> dict[str, Any]:
     """Map a CVE to MITRE ATT&CK techniques using CWE weakness types and CVSS heuristics.
 
     Returns an AttackMapping with technique IDs, names, associated tactics,
-    platform coverage, confidence scores (0.0–1.0), and rationale.
+    platform coverage, mapping_source, and rationale.
 
-    Mapping is deterministic: CWE IDs are looked up in a static map, and CVSS
-    vector attributes add low-confidence technique hints.
+    Mapping is deterministic: CWE IDs are looked up in a static map; CVSS
+    vector attributes add structurally-implied techniques when no CWE match exists.
 
     For triage, use tactic context to assess architecture fit:
     - Initial Access (TA0001): requires external network exposure
@@ -389,17 +395,10 @@ def get_attack_techniques(cve_id: str, ctx: Context) -> dict[str, Any]:
     record = fetch_cve_record(cve_id)
 
     mapping = map_cwe_to_attack(cve_id, record.weaknesses, attack_data)
-
     if record.primary_cvss:
-        extra = map_cvss_to_attack(
-            cve_id, record.primary_cvss, attack_data, set(mapping.technique_ids)
-        )
+        extra = add_structural_techniques(cve_id, record.primary_cvss, attack_data, set(mapping.technique_ids))
         if extra:
-            mapping = mapping.model_copy(
-                update={"techniques": mapping.techniques + extra,
-                        "mapping_method": "cwe_static+cvss_heuristic"}
-            )
-
+            mapping = mapping.model_copy(update={"techniques": mapping.techniques + extra})
     return mapping.model_dump(mode="json")
 
 
@@ -624,7 +623,7 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict[str, Any]:
 
     Returns a combined dict with:
     - cve: full CVERecord (description, CVSS, CWEs, CPEs, references)
-    - attack_mapping: deterministic technique mapping with confidence scores
+    - attack_mapping: deterministic technique mapping with mapping_source per technique
 
     For triage workflows, prefer triage_cve — it combines this data with
     exploitation context and produces a structured priority assessment.
@@ -635,17 +634,10 @@ def get_cve_summary(cve_id: str, ctx: Context) -> dict[str, Any]:
     record = fetch_cve_record(cve_id)
 
     mapping = map_cwe_to_attack(cve_id, record.weaknesses, attack_data)
-
     if record.primary_cvss:
-        extra = map_cvss_to_attack(
-            cve_id, record.primary_cvss, attack_data, set(mapping.technique_ids)
-        )
+        extra = add_structural_techniques(cve_id, record.primary_cvss, attack_data, set(mapping.technique_ids))
         if extra:
-            mapping = mapping.model_copy(
-                update={"techniques": mapping.techniques + extra,
-                        "mapping_method": "cwe_static+cvss_heuristic"}
-            )
-
+            mapping = mapping.model_copy(update={"techniques": mapping.techniques + extra})
     return {
         "cve": record.model_dump(mode="json"),
         "attack_mapping": mapping.model_dump(mode="json"),
@@ -1160,10 +1152,9 @@ You are assessing detection coverage for **{cve_id}**.
 ## Step 1 — Map attack techniques
 Call `get_attack_techniques("{cve_id}")` to get the deterministic technique
 mapping. Note:
-- `mapping_method`: "cwe_static" means high-confidence CWE-based mapping;
-  "cwe_static+cvss_heuristic" means additional low-confidence CVSS hints.
-- `techniques[].confidence`: 0.6+ = CWE-based (reliable), 0.2–0.5 = CVSS
-  heuristic (treat as hints only).
+- `techniques[].mapping_source`: "cwe_static" = derived from CWE lookup (reliable);
+  "cvss_*_vector" or "cvss_dos_impact" = structurally implied by CVSS vector;
+  "claude_enriched" = added or confirmed by Claude enrichment.
 
 ## Step 2 — Check community baseline
 Call `get_community_sigma_rules("{cve_id}")`:
@@ -1197,7 +1188,7 @@ Then for each gap:
 - Specify the log source needed.
 - Summarise the detection logic from `detection_notes`.
 - Note whether a community Sigma rule exists or needs to be written.
-- Prioritise gaps by technique confidence score (higher = more reliable signal).
+- Prioritise gaps by mapping_source: "cwe_static" gaps are most reliable; "cvss_*" gaps are structurally implied.
 """
 
 

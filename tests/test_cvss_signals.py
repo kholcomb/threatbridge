@@ -20,10 +20,10 @@ def _cvss(version: str, vector: str, score: float = 9.0) -> CVSSData:
     )
 
 
-def _technique(technique_id: str, tactic_ids: list[str], confidence: float = 0.9) -> MagicMock:
+def _technique(technique_id: str, tactic_ids: list[str], mapping_source: str = "cwe_static") -> MagicMock:
     tech = MagicMock()
     tech.technique_id = technique_id
-    tech.confidence = confidence
+    tech.mapping_source = mapping_source
     tech.tactics = [MagicMock(tactic_id=tid) for tid in tactic_ids]
     return tech
 
@@ -154,8 +154,8 @@ class TestRankTechniques:
 
     def test_unauthenticated_network_initial_access_leads(self):
         """T1190 (Initial Access) should rank above T1203 (Execution) for AV:N/PR:N/UI:N."""
-        t_initial = _technique("T1190", ["TA0001"], confidence=0.5)
-        t_exec    = _technique("T1203", ["TA0002"], confidence=0.9)
+        t_initial = _technique("T1190", ["TA0001"])
+        t_exec    = _technique("T1203", ["TA0002"])
 
         sig = self._signals(av="N", pr="N", ui="N")
         ranked = rank_techniques([t_exec, t_initial], sig)
@@ -164,8 +164,8 @@ class TestRankTechniques:
 
     def test_user_interaction_execution_leads(self):
         """T1203 (Execution) should rank above T1190 (Initial Access) when UI:P."""
-        t_initial = _technique("T1190", ["TA0001"], confidence=0.9)
-        t_exec    = _technique("T1203", ["TA0002"], confidence=0.5)
+        t_initial = _technique("T1190", ["TA0001"])
+        t_exec    = _technique("T1203", ["TA0002"])
 
         sig = self._signals(av="N", pr="N", ui="P")
         ranked = rank_techniques([t_initial, t_exec], sig)
@@ -174,8 +174,8 @@ class TestRankTechniques:
 
     def test_active_user_interaction_execution_leads(self):
         """UI:A (Active) also promotes Execution over Initial Access."""
-        t_initial = _technique("T1190", ["TA0001"], confidence=0.9)
-        t_exec    = _technique("T1203", ["TA0002"], confidence=0.5)
+        t_initial = _technique("T1190", ["TA0001"])
+        t_exec    = _technique("T1203", ["TA0002"])
 
         sig = self._signals(av="N", pr="N", ui="A")
         ranked = rank_techniques([t_initial, t_exec], sig)
@@ -184,8 +184,8 @@ class TestRankTechniques:
 
     def test_local_vector_deprioritises_initial_access(self):
         """AV:L should penalise Initial Access techniques below PrivEsc."""
-        t_initial = _technique("T1190", ["TA0001"], confidence=0.9)
-        t_privesc = _technique("T1068", ["TA0004"], confidence=0.5)
+        t_initial = _technique("T1190", ["TA0001"])
+        t_privesc = _technique("T1068", ["TA0004"])
 
         sig = self._signals(av="L")
         ranked = rank_techniques([t_initial, t_privesc], sig)
@@ -194,9 +194,9 @@ class TestRankTechniques:
 
     def test_adjacent_network_lateral_movement_promoted(self):
         """AV:A should promote Lateral Movement alongside Initial Access."""
-        t_initial  = _technique("T1210", ["TA0001"], confidence=0.5)
-        t_lateral  = _technique("T1557", ["TA0008"], confidence=0.5)
-        t_privesc  = _technique("T1068", ["TA0004"], confidence=0.9)
+        t_initial  = _technique("T1210", ["TA0001"])
+        t_lateral  = _technique("T1557", ["TA0008"])
+        t_privesc  = _technique("T1068", ["TA0004"])
 
         sig = self._signals(av="A")
         ranked = rank_techniques([t_privesc, t_initial, t_lateral], sig)
@@ -208,8 +208,8 @@ class TestRankTechniques:
 
     def test_subsequent_impact_promotes_lateral_and_privesc(self):
         """subsequent_impact=True should boost Lateral Movement and PrivEsc."""
-        t_initial  = _technique("T1190", ["TA0001"], confidence=0.9)
-        t_lateral  = _technique("T1021", ["TA0008"], confidence=0.5)
+        t_initial  = _technique("T1190", ["TA0001"])
+        t_lateral  = _technique("T1021", ["TA0008"])
 
         sig = self._signals(av="N", pr="N", ui="N", subsequent=True)
         ranked = rank_techniques([t_initial, t_lateral], sig)
@@ -220,21 +220,21 @@ class TestRankTechniques:
         assert ranked[0].technique_id == "T1190"
         assert ranked[1].technique_id == "T1021"
 
-    def test_none_signals_falls_back_to_confidence_sort(self):
-        """Without signals, sort by confidence descending (existing behaviour)."""
-        t_low  = _technique("T1190", ["TA0001"], confidence=0.3)
-        t_high = _technique("T1203", ["TA0002"], confidence=0.9)
+    def test_none_signals_falls_back_to_source_priority_sort(self):
+        """Without signals, sort by mapping_source priority: cwe_static > claude_enriched > cvss_*."""
+        t_cvss    = _technique("T1190", ["TA0001"], mapping_source="cvss_network_vector")
+        t_cwe     = _technique("T1203", ["TA0002"], mapping_source="cwe_static")
 
-        ranked = rank_techniques([t_low, t_high], signals=None)
+        ranked = rank_techniques([t_cvss, t_cwe], signals=None)
 
         assert ranked[0].technique_id == "T1203"
 
-    def test_confidence_breaks_ties_within_same_fit_score(self):
-        """Two techniques with equal fit score should be ordered by confidence."""
-        t_low  = _technique("T1190", ["TA0001"], confidence=0.5)
-        t_high = _technique("T1133", ["TA0001"], confidence=0.9)  # both Initial Access
+    def test_source_priority_breaks_ties_within_same_fit_score(self):
+        """Two techniques with equal fit score should be ordered by mapping_source priority."""
+        t_cvss = _technique("T1190", ["TA0001"], mapping_source="cvss_network_vector")
+        t_cwe  = _technique("T1133", ["TA0001"], mapping_source="cwe_static")  # both Initial Access
 
         sig = self._signals(av="N", pr="N", ui="N")
-        ranked = rank_techniques([t_low, t_high], sig)
+        ranked = rank_techniques([t_cvss, t_cwe], sig)
 
         assert ranked[0].technique_id == "T1133"

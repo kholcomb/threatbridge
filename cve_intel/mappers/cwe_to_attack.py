@@ -27,12 +27,15 @@ def map_cwe_to_attack(
 ) -> AttackMapping:
     cwe_map = _load_map()
     technique_sources: dict[str, list[str]] = {}  # tid → [cwe_id, ...]
+    unmapped: list[str] = []
 
     for cwe_id in cwe_ids:
         entry = cwe_map.get(cwe_id)
         if entry:
             for tid in entry["techniques"]:
                 technique_sources.setdefault(tid, []).append(cwe_id)
+        else:
+            unmapped.append(cwe_id)
 
     techniques: list[AttackTechnique] = []
     for tid, sources in technique_sources.items():
@@ -40,13 +43,7 @@ def map_cwe_to_attack(
         if tech:
             cwe_label = ", ".join(sources)
             rationale = f"{cwe_label} → {tid} (static map)"
-            # Use per-entry confidence from the map; fall back to 0.6 if absent.
-            # Confidence values align with the Claude enricher's scale:
-            #   0.9 = unambiguous, 0.7 = standard class, 0.5 = plausible, 0.3 = speculative
-            base_confidence = max(
-                cwe_map[src].get("confidence", 0.6) for src in sources if src in cwe_map
-            )
-            tech = tech.model_copy(update={"confidence": base_confidence, "rationale": rationale})
+            tech = tech.model_copy(update={"mapping_source": "cwe_static", "rationale": rationale})
             techniques.append(tech)
 
     return AttackMapping(
@@ -54,4 +51,5 @@ def map_cwe_to_attack(
         techniques=techniques,
         mapping_method="cwe_static",
         rationale=f"Static CWE-to-ATT&CK map for: {', '.join(cwe_ids) or 'none'}",
+        unmapped_cwes=unmapped,
     )

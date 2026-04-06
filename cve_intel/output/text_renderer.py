@@ -74,16 +74,21 @@ def render_text(result: AnalysisResult) -> None:
         atk_table.add_column("ID", style="bold yellow", width=12)
         atk_table.add_column("Name", width=40)
         atk_table.add_column("Tactics", width=30)
-        atk_table.add_column("Conf.", width=6)
+        atk_table.add_column("Source", width=14)
+
+        _SOURCE_STYLE = {
+            "cwe_static": "green",
+            "claude_enriched": "cyan",
+        }
 
         for tech in mapping.techniques:
             tactics = ", ".join(t.name for t in tech.tactics[:3])
-            conf_style = "green" if tech.confidence >= 0.7 else "yellow" if tech.confidence >= 0.4 else "dim"
+            src_style = _SOURCE_STYLE.get(tech.mapping_source, "dim")
             atk_table.add_row(
                 tech.technique_id,
                 tech.name,
                 tactics,
-                Text(f"{tech.confidence:.0%}", style=conf_style),
+                Text(tech.mapping_source, style=src_style),
             )
         console.print(atk_table)
         if mapping.rationale:

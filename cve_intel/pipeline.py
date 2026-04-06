@@ -21,8 +21,8 @@ from cve_intel.generators.sigma_gen import SigmaGenerator
 from cve_intel.generators.snort_gen import SnortGenerator
 from cve_intel.generators.suricata_gen import SuricataGenerator
 from cve_intel.generators.yara_gen import YaraGenerator
-from cve_intel.mappers.cvss_to_attack import map_cvss_to_attack
 from cve_intel.mappers.cwe_to_attack import map_cwe_to_attack
+from cve_intel.mappers.cvss_signals import add_structural_techniques
 from cve_intel.models.attack import AttackMapping
 from cve_intel.models.ioc import IOCBundle
 from cve_intel.models.rules import AnalysisResult, RuleBundle
@@ -84,16 +84,12 @@ def analyze(
     # Stage 4: Deterministic Mapping
     prog.advance("Mapping to ATT&CK techniques")
     mapping = map_cwe_to_attack(cve_id, cve_record.weaknesses, attack_data)
-
     if cve_record.primary_cvss:
-        existing_ids = set(mapping.technique_ids)
-        extra = map_cvss_to_attack(cve_id, cve_record.primary_cvss, attack_data, existing_ids)
+        extra = add_structural_techniques(
+            cve_id, cve_record.primary_cvss, attack_data, set(mapping.technique_ids)
+        )
         if extra:
-            all_techs = mapping.techniques + extra
-            mapping = mapping.model_copy(update={
-                "techniques": all_techs,
-                "mapping_method": "cwe_static+cvss_heuristic",
-            })
+            mapping = mapping.model_copy(update={"techniques": mapping.techniques + extra})
 
     enriched = False
 

@@ -9,14 +9,9 @@ Rules:
   or what an attacker can accomplish by exploiting it.
 - Do not include post-exploitation techniques that require additional attacker tools not \
   implied by the CVE itself.
-- Assign confidence scores:
-  0.9 = CVE description unambiguously names this technique.
-  0.7 = Standard classification for this CWE/vulnerability class, consistent with description.
-  0.5 = Plausible given affected product/attack surface but not directly described.
-  0.3 = Speculative — only include if you can cite a specific reason from the CVE text.
-  Do not assign 0.9 to added techniques not mentioned in the CVE description.
-- Be concise in rationale (1 sentence per technique).
+- Provide a concise rationale (1 sentence) citing the specific CVE behavior that maps to each technique.
 - Use exact ATT&CK technique IDs (e.g., T1190, T1059.001).
+- If a candidate technique does not fit, add it to removed_technique_ids with no rationale needed.
 """
 
 ATTACK_ENRICHER_USER = """\
@@ -29,7 +24,7 @@ Affected Products: {products}
 CWE IDs: {cwes}
 Candidate Techniques (from static mapping):
 {candidate_techniques}
-
+{unmapped_note}
 Return your refined mapping using the provided tool.
 """
 
@@ -43,10 +38,9 @@ ATTACK_ENRICHER_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "technique_id": {"type": "string"},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     "rationale": {"type": "string"},
                 },
-                "required": ["technique_id", "confidence", "rationale"],
+                "required": ["technique_id", "rationale"],
             },
         },
         "added_techniques": {
@@ -56,10 +50,9 @@ ATTACK_ENRICHER_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "technique_id": {"type": "string"},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     "rationale": {"type": "string"},
                 },
-                "required": ["technique_id", "confidence", "rationale"],
+                "required": ["technique_id", "rationale"],
             },
         },
         "removed_technique_ids": {
