@@ -37,6 +37,7 @@ class ScannerFinding:
     installed_version: str | None = None
     fixed_version: str | None = None
     ecosystem: str | None = None   # "maven", "npm", "pypi", etc. from pURL
+    source_file: str | None = None  # lockfile/manifest URI from physicalLocation
 
 
 @dataclass
@@ -164,10 +165,11 @@ def parse_sarif(data: dict) -> list[ScannerFinding]:
 
             cve_id = rule_id.upper()
 
-            # Package name + installed version from logicalLocations
-            package, installed_version = _package_from_sarif_locations(
-                result.get("locations", [])
-            )
+            # Package name + installed version from logicalLocations;
+            # source file (lockfile/manifest) from physicalLocation.
+            locations_raw = result.get("locations", [])
+            package, installed_version = _package_from_sarif_locations(locations_raw)
+            source_file = _source_file_from_sarif_locations(locations_raw)
 
             # Fix version: result properties → rule index → message text
             fixed_version = (
@@ -189,9 +191,11 @@ def parse_sarif(data: dict) -> list[ScannerFinding]:
                     package=package,
                     installed_version=installed_version,
                     fixed_version=fixed_version,
+                    source_file=source_file,
                 )
             else:
                 best_fix = fixed_version or existing.fixed_version
+                best_source = source_file or existing.source_file
                 if package and not existing.package:
                     # New finding has package context the existing one lacks — replace,
                     # preserving the best fix version from either occurrence.
@@ -200,15 +204,17 @@ def parse_sarif(data: dict) -> list[ScannerFinding]:
                         package=package,
                         installed_version=installed_version,
                         fixed_version=best_fix,
+                        source_file=best_source,
                     )
-                elif best_fix != existing.fixed_version:
-                    # Same or no package context, but a better fix version appeared —
-                    # update in place without replacing the existing package info.
+                elif best_fix != existing.fixed_version or best_source != existing.source_file:
+                    # Same or no package context, but a better fix version or source
+                    # file appeared — update in place without replacing package info.
                     findings[cve_id] = ScannerFinding(
                         cve_id=cve_id,
                         package=existing.package,
                         installed_version=existing.installed_version,
                         fixed_version=best_fix,
+                        source_file=best_source,
                     )
 
     return list(findings.values())
@@ -277,6 +283,20 @@ def _package_from_sarif_locations(locations: list) -> tuple[str | None, str | No
             if name:
                 return name, None
     return None, None
+
+
+def _source_file_from_sarif_locations(locations: list) -> str | None:
+    """Extract the lockfile/manifest URI from a SARIF locations array.
+
+    Returns the first physicalLocation artifactLocation uri found, which is
+    typically the lockfile path (e.g. "uv.lock", "package-lock.json").
+    """
+    for loc in locations:
+        pl = loc.get("physicalLocation", {})
+        uri = pl.get("artifactLocation", {}).get("uri")
+        if uri:
+            return uri
+    return None
 
 
 def _fixed_version_from_message(text: str) -> str | None:
