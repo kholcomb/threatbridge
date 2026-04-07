@@ -165,3 +165,5 @@ jobs:
             cve-list.txt
             sarif-results/
           retention-days: 30
+
+# ci-test: trigger workflow validation
