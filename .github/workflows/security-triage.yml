@@ -124,8 +124,8 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Advisory narrative from Claude — never fails CI.
-      # Claude uses the MCP server to triage CVEs, cross-references the deployment
-      # manifest, and posts a ranked PR comment with remediation steps.
+      # Claude uses the cve-intel MCP server to triage CVEs with full ATT&CK
+      # mapping and detection context, then posts a ranked PR comment.
       # The gate above has already made the pass/fail decision deterministically.
       - name: Claude advisory comment
         if: always() && hashFiles('cve-list.txt') != ''
@@ -133,23 +133,56 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           prompt: |
-            The file cve-list.txt contains CVE IDs found by Grype in this pull request.
+            You have access to the cve-intel MCP server. Use it to produce a
+            security advisory comment for this pull request.
 
-            Step 1 — Triage: call batch_triage_cves with every CVE ID in cve-list.txt.
+            ## Inputs available to you
+            - grype-results.json — raw Grype scan output (vulnerability matches
+              with package name, installed version, and fix version per finding)
+            - cve-list.txt — deduplicated CVE IDs extracted from grype-results.json
+            - .security/deployment.yml — optional deployment manifest describing
+              network exposure, auth model, and runtime environment
 
-            Step 2 — Deployment context: if .security/deployment.yml exists, read it and
-              use it to qualify which attack vectors are relevant to this deployment.
-              If the file does not exist, skip deployment qualification entirely and note
-              that in the comment.
+            ## Steps
 
-            Step 3 — Post a PR comment with:
-              - A ranked table of findings (CRITICAL → LOW) with CVSS score and priority tier
-              - For each CRITICAL/HIGH: what the vulnerability enables, whether the attack
-                vector is relevant given the deployment context, and a concrete remediation step
-              - Any CVEs that were skipped (not found in NVD, reserved, etc.)
+            1. Read grype-results.json to build a map of CVE ID → package context
+               (name, installed version, fix version).
+
+            2. Call batch_triage_cves with all CVE IDs from cve-list.txt.
+               This returns priority tier, KEV/SSVC exploitation status, ATT&CK
+               techniques, attack requirements, and impact scope for each CVE.
+
+            3. For each CRITICAL or HIGH finding:
+               a. Call lookup_technique for each mapped ATT&CK technique to get
+                  the full technique description, targeted platforms, and data sources.
+               b. Call get_community_sigma_rules (passing technique_ids) to check
+                  whether detection rules exist for the techniques involved.
+
+            4. If .security/deployment.yml exists, read it and use attack_requirements
+               from the triage results to qualify which findings are actually reachable
+               given the deployment's network exposure and auth model.
+               If the file does not exist, note this and skip qualification.
+
+            5. Post a single PR comment structured as follows:
+
+            ### Security Scan — [N critical / N high / N medium / N low]
+
+            A ranked table of all findings:
+            | CVE | Package | Installed → Fix | Priority | CVSS | KEV |
+            Each row links the CVE ID to nvd.nist.gov.
+
+            For each CRITICAL and HIGH finding, a sub-section with:
+            - What the vulnerability enables (plain English, 1–2 sentences)
+            - ATT&CK techniques involved and what stage of the kill chain they map to
+            - Whether the attack vector is relevant given deployment context
+            - Detection coverage: whether community Sigma rules exist for the techniques
+            - Concrete remediation: exact package upgrade with version
+
+            A final section listing any CVEs that could not be triaged (not found,
+            reserved, or rate-limited) for manual review.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--mcp-config .mcp.ci.json --max-turns 10"
+          claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
 
       # -----------------------------------------------------------------------
       - name: Upload scan artifacts
