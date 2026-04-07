@@ -275,20 +275,23 @@ def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:
         version = "2.0"
 
     # Use the cvss library to calculate the base score
+    base_score: float | None = None
     try:
         if version in ("3.0", "3.1"):
             from cvss import CVSS3
             c = CVSS3(vector)
             base_score = float(c.base_score)
         elif version == "4.0":
-            # cvss library may not support v4; fall back to vector-only parse
-            base_score = _score_from_vector_fields(raw_vector, version)
+            from cvss import CVSS4
+            c = CVSS4(vector)
+            base_score = float(c.base_score)
         else:
             from cvss import CVSS2
             c = CVSS2(vector)
             base_score = float(c.base_score)
     except Exception:
-        base_score = _score_from_vector_fields(raw_vector, version)
+        logger.warning("Could not calculate CVSS score from vector %r — skipping entry", vector)
+        return None
 
     severity = _score_to_severity(base_score)
 
@@ -313,11 +316,6 @@ def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:
         integrity_impact=_CIA_MAP.get(fields.get("I", ""), fields.get("I")),
         availability_impact=_CIA_MAP.get(fields.get("A", ""), fields.get("A")),
     )
-
-
-def _score_from_vector_fields(raw_vector: str, version: str) -> float:
-    """Fallback: return 0.0 if we can't calculate a score."""
-    return 0.0
 
 
 def _score_to_severity(score: float) -> CVSSSeverity:
