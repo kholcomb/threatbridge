@@ -1,0 +1,42 @@
+name: Lint Workflows
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  push:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: Lint workflow files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Install actionlint
+        run: |
+          mkdir -p /tmp/actionlint-dl
+          gh release download v1.7.12 \
+            --repo rhysd/actionlint \
+            --pattern "actionlint_1.7.12_linux_amd64.tar.gz" \
+            --pattern "actionlint_1.7.12_checksums.txt" \
+            --dir /tmp/actionlint-dl
+          (cd /tmp/actionlint-dl && sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt)
+          tar -xzf /tmp/actionlint-dl/actionlint_1.7.12_linux_amd64.tar.gz -C /tmp/actionlint-dl
+          install -m 755 /tmp/actionlint-dl/actionlint /usr/local/bin/actionlint
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run actionlint
+        run: actionlint

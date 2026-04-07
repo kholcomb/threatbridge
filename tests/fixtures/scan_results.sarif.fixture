@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "osv-scanner",
+          "version": "2.3.5",
+          "rules": [
+            {
+              "id": "CVE-2024-21762",
+              "shortDescription": {"text": "CVE-2024-21762"}
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2024-21762",
+          "level": "warning",
+          "message": {"text": "Package is vulnerable to CVE-2024-21762"},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "uv.lock"}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
