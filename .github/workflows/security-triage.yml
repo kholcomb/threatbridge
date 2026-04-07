@@ -46,9 +46,9 @@ jobs:
           gh release download v2.3.5 \
             --repo google/osv-scanner \
             --pattern "osv-scanner_linux_amd64" \
-            --pattern "osv-scanner_checksums.txt" \
+            --pattern "osv-scanner_SHA256SUMS" \
             --dir /tmp/osv-dl
-          sha256sum --check --ignore-missing /tmp/osv-dl/osv-scanner_checksums.txt
+          sha256sum --check --ignore-missing /tmp/osv-dl/osv-scanner_SHA256SUMS
           install -m 755 /tmp/osv-dl/osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
