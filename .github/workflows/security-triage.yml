@@ -152,70 +152,35 @@ jobs:
         continue-on-error: true
 
       # -----------------------------------------------------------------------
-      # Advisory narrative from Claude — never fails CI.
-      # Claude uses the cve-intel MCP server to triage CVEs with full ATT&CK
-      # mapping and detection context, then posts a ranked PR comment.
-      # The gate above has already made the pass/fail decision deterministically.
-      - name: Claude advisory comment
-        if: always() && steps.gate.outputs.total != '0'
+      # -----------------------------------------------------------------------
+      # Advisory narrative — posts a @claude comment so the Claude Code
+      # workflow (claude.yml) handles the response using its own auth.
+      # The gate has already made the pass/fail decision; this is informational.
+      - name: Request Claude advisory
+        if: always() && steps.gate.outputs.total != '0' && github.event.pull_request.number != ''
         continue-on-error: true
-        uses: anthropics/claude-code-action@v1
-        with:
-          prompt: |
-            You have access to the cve-intel MCP server. Use it to produce a
-            security advisory comment for this pull request.
+        run: |
+          # Build CVE list from enriched SARIF
+          CVE_LIST=$(jq -r '
+            .runs[].results[] |
+            "- \(.ruleId) | \(.properties.package // "unknown") \(.properties.installedVersion // "") → \(.properties.fixedVersion // "?") | \(.level) | CVSS \(.properties.cvssScore // "?")"
+          ' sarif-results/results.sarif.json 2>/dev/null || echo "- (see sarif-results/results.sarif.json)")
 
-            ## Inputs available to you
-            - scan-results.sarif — scanner output in SARIF 2.1.0 format.
-              Package context (name, installed version, fix version) is in
-              results[].locations[].logicalLocations[] and results[].message.text.
-            - sarif-results/results.sarif.json — enriched SARIF produced by cve-intel,
-              with priority tier, CVSS score, KEV status, and ATT&CK technique IDs per finding.
-            - .security/deployment.yml — optional deployment manifest describing
-              network exposure, auth model, and runtime environment
+          gh pr comment ${{ github.event.pull_request.number }} --body "@claude
+          Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
 
-            ## Steps
+          Use the cve-intel MCP server (\`--mcp-config .mcp.ci.json\`) to produce a security advisory for this PR.
 
-            1. Read sarif-results/results.sarif.json to get the full enriched finding list.
-               Cross-reference scan-results.sarif to add package context (name, installed
-               version, fix version) for each CVE ID.
+          **Findings:**
+          ${CVE_LIST}
 
-            2. Call batch_triage_cves with all CVE IDs from sarif-results/results.sarif.json.
-               This returns priority tier, KEV/SSVC exploitation status, ATT&CK
-               techniques, attack requirements, and impact scope for each CVE.
-
-            3. For each CRITICAL or HIGH finding:
-               a. Call lookup_technique for each mapped ATT&CK technique to get
-                  the full technique description, targeted platforms, and data sources.
-               b. Call get_community_sigma_rules (passing technique_ids) to check
-                  whether detection rules exist for the techniques involved.
-
-            4. If .security/deployment.yml exists, read it and use attack_requirements
-               from the triage results to qualify which findings are actually reachable
-               given the deployment's network exposure and auth model.
-               If the file does not exist, note this and skip qualification.
-
-            5. Post a single PR comment structured as follows:
-
-            ### Security Scan — [N critical / N high / N medium / N low]
-
-            A ranked table of all findings:
-            | CVE | Package | Installed → Fix | Priority | CVSS | KEV |
-            Each row links the CVE ID to nvd.nist.gov.
-
-            For each CRITICAL and HIGH finding, a sub-section with:
-            - What the vulnerability enables (plain English, 1–2 sentences)
-            - ATT&CK techniques involved and what stage of the kill chain they map to
-            - Whether the attack vector is relevant given deployment context
-            - Detection coverage: whether community Sigma rules exist for the techniques
-            - Concrete remediation: exact package upgrade with version
-
-            A final section listing any CVEs that could not be triaged (not found,
-            reserved, or rate-limited) for manual review.
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
-          show_full_output: "true"
+          **Instructions:**
+          1. Call \`batch_triage_cves\` with all CVE IDs above
+          2. For each CRITICAL/HIGH finding call \`lookup_technique\` and \`get_community_sigma_rules\`
+          3. Post a single advisory comment with: ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package + version)
+          "
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # -----------------------------------------------------------------------
       - name: Upload triage artifacts
