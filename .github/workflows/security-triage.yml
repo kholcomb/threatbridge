@@ -8,8 +8,10 @@ on:
 permissions:
   contents: read
   pull-requests: write        # claude-code-action posts PR comment
+  issues: write               # claude-code-action posts issue comment
   id-token: write             # OIDC cloud auth (Bedrock / Vertex) if used
   security-events: write      # upload-sarif to GitHub Security tab
+  actions: read               # claude-code-action reads CI results
 
 env:
   # Pinned ATT&CK version — must match ATTACK_VERSION in cve_intel/fetchers/attack_data.py.
@@ -152,35 +154,39 @@ jobs:
         continue-on-error: true
 
       # -----------------------------------------------------------------------
-      # -----------------------------------------------------------------------
-      # Advisory narrative — posts a @claude comment so the Claude Code
-      # workflow (claude.yml) handles the response using its own auth.
-      # The gate has already made the pass/fail decision; this is informational.
-      - name: Request Claude advisory
-        if: always() && steps.gate.outputs.total != '0' && github.event.pull_request.number != ''
-        continue-on-error: true
+      # Build the CVE list for the advisory prompt.
+      - name: Build CVE list
+        id: cve_list
+        if: always() && steps.gate.outputs.total != '0'
         run: |
-          # Build CVE list from enriched SARIF
-          CVE_LIST=$(jq -r '
-            .runs[].results[] |
-            "- \(.ruleId) | \(.properties.package // "unknown") \(.properties.installedVersion // "") → \(.properties.fixedVersion // "?") | \(.level) | CVSS \(.properties.cvssScore // "?")"
-          ' sarif-results/results.sarif.json 2>/dev/null || echo "- (see sarif-results/results.sarif.json)")
+          CVE_IDS=$(jq -r '.runs[].results[].ruleId' sarif-results/results.sarif.json 2>/dev/null \
+            | sort -u | tr '\n' ' ')
+          echo "ids=${CVE_IDS}" >> "$GITHUB_OUTPUT"
 
-          gh pr comment ${{ github.event.pull_request.number }} --body "@claude
-          Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
+      # -----------------------------------------------------------------------
+      # Advisory narrative — runs claude-code-action inline so the advisory is
+      # generated and posted BEFORE the enforce gate step runs.
+      # Works on both PR and workflow_dispatch runs.
+      - name: Generate Claude advisory
+        if: always() && steps.gate.outputs.total != '0'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@6e2bd52842c65e914eba5c8badd17560bd26b5de  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
+          additional_permissions: |
+            actions: read
+          prompt: |
+            Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
 
-          Use the cve-intel MCP server (\`--mcp-config .mcp.ci.json\`) to produce a security advisory for this PR.
+            Use the cve-intel MCP server to produce a security advisory.
 
-          **Findings:**
-          ${CVE_LIST}
+            CVE IDs from scan: ${{ steps.cve_list.outputs.ids }}
 
-          **Instructions:**
-          1. Call \`batch_triage_cves\` with all CVE IDs above
-          2. For each CRITICAL/HIGH finding call \`lookup_technique\` and \`get_community_sigma_rules\`
-          3. Post a single advisory comment with: ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package + version)
-          "
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            Instructions:
+            1. Call `batch_triage_cves` with all CVE IDs above
+            2. For each CRITICAL/HIGH finding call `lookup_technique` and `get_community_sigma_rules`
+            3. Post a single advisory comment with: ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package + version)
 
       # -----------------------------------------------------------------------
       - name: Upload triage artifacts
@@ -192,8 +198,8 @@ jobs:
           retention-days: 30
 
       # -----------------------------------------------------------------------
-      # Enforce gate — fails the job AFTER Claude has posted its advisory.
-      # Separated from the SARIF gate step so Claude always gets to comment first.
+      # Enforce gate — runs after Generate Claude advisory so the advisory is
+      # always visible before the job fails.
       - name: Enforce gate
         if: always() && vars.FAIL_ON_CRITICAL != 'false' && steps.gate.outputs.critical_count != '' && steps.gate.outputs.critical_count != '0'
         run: |
