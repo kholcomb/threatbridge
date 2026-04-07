@@ -15,21 +15,71 @@ env:
   # Pinned ATT&CK version — must match ATTACK_VERSION in cve_intel/fetchers/attack_data.py.
   # Update both together when upgrading to a new ATT&CK release.
   ATTACK_VERSION: "ATT&CK-v18.1"
+  # Artifact name shared between the scan and triage jobs.
+  SCAN_ARTIFACT: scan-results
 
 jobs:
-  scan-and-triage:
-    name: Scan → Gate → Narrative
+  # -------------------------------------------------------------------------
+  # Job 1: Scan — runs osv-scanner against uv.lock.
+  # osv-scanner queries OSV.dev which aggregates NVD, GitHub Advisory Database,
+  # and many other sources — broader coverage than Grype's internal DB alone.
+  # Produces scan-results.sarif and uploads it as a workflow artifact for the
+  # triage job. Swap this job out for any other SARIF-emitting scanner.
+  scan:
+    name: Scan dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install osv-scanner
+        run: |
+          gh release download v2.3.5 \
+            --repo google/osv-scanner \
+            --pattern "osv-scanner_linux_amd64" \
+            --dir /usr/local/bin
+          chmod +x /usr/local/bin/osv-scanner_linux_amd64
+          ln -s /usr/local/bin/osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Scan the resolved lockfile against OSV.dev — covers NVD, GitHub Advisory
+      # Database, and ecosystem-specific advisories in a single query.
+      - name: Scan uv.lock
+        run: osv-scanner scan --lockfile uv.lock --format sarif --output scan-results.sarif || true
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: ${{ env.SCAN_ARTIFACT }}
+          path: scan-results.sarif
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
+  # Job 2: Triage — scanner-agnostic. Downloads the SARIF artifact produced
+  # by the scan job (or any other job that uploads scan-results/scan-results.sarif)
+  # and runs the deterministic gate + Claude advisory.
+  triage:
+    name: Gate → Narrative
+    needs: scan
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       # -----------------------------------------------------------------------
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Download scan results
+        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806  # v4.1.9
+        with:
+          name: ${{ env.SCAN_ARTIFACT }}
 
       # -----------------------------------------------------------------------
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.11"
 
@@ -38,7 +88,7 @@ jobs:
       # version tag so this is safe to cache indefinitely. NVD data is NOT
       # cached; it is always fetched fresh to avoid stale vulnerability scores.
       - name: Cache ATT&CK bundle
-        uses: actions/cache@v4
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7  # v5.0.4
         with:
           path: ~/.cache/cve-intel/attack
           key: attack-${{ env.ATTACK_VERSION }}
@@ -54,70 +104,49 @@ jobs:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
       # -----------------------------------------------------------------------
-      - name: Install Grype
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-
-      - name: Run Grype vulnerability scan
-        run: grype dir:. --output json --file grype-results.json || true
-
-      # -----------------------------------------------------------------------
-      # Extract CVE IDs from Grype output into a plain list.
-      # cve-intel batch accepts one CVE-ID per line.
-      - name: Extract CVE IDs
-        run: |
-          jq -r '[.matches[].vulnerability.id | select(startswith("CVE-"))] | unique[]' \
-            grype-results.json > cve-list.txt
-          COUNT=$(wc -l < cve-list.txt | tr -d ' ')
-          echo "Found ${COUNT} unique CVE(s)"
-          echo "## Security Scan" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "No CVE findings." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "**${COUNT} CVE(s) found by Grype** — running deterministic triage gate." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      # -----------------------------------------------------------------------
-      # Deterministic gate: no AI, no external API calls beyond NVD.
-      # cve-intel batch fetches NVD and CISA Vulnrichment data and emits SARIF 2.1.0.
+      # Deterministic gate: feeds the scanner SARIF directly into cve-intel batch.
+      # cve-intel auto-detects SARIF format, fetches NVD + CISA Vulnrichment data,
+      # and emits an enriched SARIF 2.1.0.
       # Level assignment uses CVSS score, KEV status, and SSVC exploitation signals.
       # Defaults: error = CVSS >= 9.0 OR KEV-listed OR SSVC exploitation=active.
       # Override thresholds via SARIF_POLICY_ARGS repo variable (see batch --help).
-      # The gate fails if any result has level=error. Skip if no CVEs were found.
+      # NOTE: This step records findings but does NOT fail the job — the Enforce
+      # gate step below does that after Claude has had a chance to comment.
       - name: Deterministic SARIF gate
-        if: env.FAIL_ON_CRITICAL != 'false'
+        id: gate
         run: |
-          if [ ! -s cve-list.txt ]; then
-            echo "No CVEs to gate on — passing."
-            exit 0
-          fi
-
           mkdir -p sarif-results
-          cve-intel batch cve-list.txt \
+          cve-intel batch scan-results.sarif \
             --format sarif \
             --output sarif-results/ \
             --no-enrich \
             ${{ vars.SARIF_POLICY_ARGS }}
 
+          if [ ! -f sarif-results/results.sarif.json ]; then
+            echo "No CVE findings in scan results — passing."
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "critical_count=0" >> "$GITHUB_OUTPUT"
+            echo "## Security Triage" >> "$GITHUB_STEP_SUMMARY"
+            echo "No CVE findings." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          TOTAL=$(jq '[.runs[].results[]] | length' sarif-results/results.sarif.json)
           CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error")] | length' \
             sarif-results/results.sarif.json)
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Gate result:** ${CRITICAL_COUNT} critical (CVSS ≥ 9.0) finding(s)" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$CRITICAL_COUNT" -gt 0 ]; then
-            echo "::error::${CRITICAL_COUNT} critical CVE(s) detected (CVSS ≥ 9.0) — review the Security tab."
-            exit 1
-          fi
+          echo "total=${TOTAL}" >> "$GITHUB_OUTPUT"
+          echo "critical_count=${CRITICAL_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "## Security Triage" >> "$GITHUB_STEP_SUMMARY"
+          echo "**${TOTAL} CVE(s) found. Gate result:** ${CRITICAL_COUNT} critical (CVSS ≥ 9.0)" >> "$GITHUB_STEP_SUMMARY"
         env:
-          FAIL_ON_CRITICAL: ${{ vars.FAIL_ON_CRITICAL || 'true' }}
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
       # -----------------------------------------------------------------------
-      # Upload SARIF to the GitHub Security tab (Dependency Review / Code Scanning).
+      # Upload enriched SARIF to the GitHub Security tab.
       - name: Upload SARIF to GitHub Security tab
         if: always() && hashFiles('sarif-results/results.sarif.json') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@5c8a8a642e79153f5d047b10ec1cba1d1cc65699  # v3
         with:
           sarif_file: sarif-results/results.sarif.json
         continue-on-error: true
@@ -128,7 +157,7 @@ jobs:
       # mapping and detection context, then posts a ranked PR comment.
       # The gate above has already made the pass/fail decision deterministically.
       - name: Claude advisory comment
-        if: always() && hashFiles('cve-list.txt') != ''
+        if: always() && steps.gate.outputs.total != '0'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -137,18 +166,21 @@ jobs:
             security advisory comment for this pull request.
 
             ## Inputs available to you
-            - grype-results.json — raw Grype scan output (vulnerability matches
-              with package name, installed version, and fix version per finding)
-            - cve-list.txt — deduplicated CVE IDs extracted from grype-results.json
+            - scan-results.sarif — scanner output in SARIF 2.1.0 format.
+              Package context (name, installed version, fix version) is in
+              results[].locations[].logicalLocations[] and results[].message.text.
+            - sarif-results/results.sarif.json — enriched SARIF produced by cve-intel,
+              with priority tier, CVSS score, KEV status, and ATT&CK technique IDs per finding.
             - .security/deployment.yml — optional deployment manifest describing
               network exposure, auth model, and runtime environment
 
             ## Steps
 
-            1. Read grype-results.json to build a map of CVE ID → package context
-               (name, installed version, fix version).
+            1. Read sarif-results/results.sarif.json to get the full enriched finding list.
+               Cross-reference scan-results.sarif to add package context (name, installed
+               version, fix version) for each CVE ID.
 
-            2. Call batch_triage_cves with all CVE IDs from cve-list.txt.
+            2. Call batch_triage_cves with all CVE IDs from sarif-results/results.sarif.json.
                This returns priority tier, KEV/SSVC exploitation status, ATT&CK
                techniques, attack requirements, and impact scope for each CVE.
 
@@ -183,15 +215,22 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
+          show_full_output: "true"
 
       # -----------------------------------------------------------------------
-      - name: Upload scan artifacts
+      - name: Upload triage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: security-triage
-          path: |
-            grype-results.json
-            cve-list.txt
-            sarif-results/
+          path: sarif-results/
           retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Enforce gate — fails the job AFTER Claude has posted its advisory.
+      # Separated from the SARIF gate step so Claude always gets to comment first.
+      - name: Enforce gate
+        if: always() && vars.FAIL_ON_CRITICAL != 'false' && steps.gate.outputs.critical_count != '' && steps.gate.outputs.critical_count != '0'
+        run: |
+          echo "::error::${{ steps.gate.outputs.critical_count }} critical CVE(s) detected (CVSS ≥ 9.0) — review the Security tab and Claude advisory above."
+          exit 1
