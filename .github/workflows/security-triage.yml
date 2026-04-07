@@ -176,7 +176,7 @@ jobs:
           claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
           additional_permissions: |
             actions: read
-          direct_prompt: |
+          prompt: |
             Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
 
             Use the cve-intel MCP server to produce a security advisory.
