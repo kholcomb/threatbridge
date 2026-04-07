@@ -55,13 +55,11 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # -----------------------------------------------------------------------
+      - name: Install Grype
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
       - name: Run Grype vulnerability scan
-        uses: anchore/scan-action@v3
-        with:
-          path: "."
-          output-format: json
-          output-file: grype-results.json
-          fail-build: false
+        run: grype dir:. --output json --file grype-results.json || true
 
       # -----------------------------------------------------------------------
       # Extract CVE IDs from Grype output into a plain list.
@@ -165,5 +163,3 @@ jobs:
             cve-list.txt
             sarif-results/
           retention-days: 30
-
-# ci-test: trigger workflow validation
