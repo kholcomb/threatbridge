@@ -180,44 +180,25 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Smoke-test the MCP server before handing off to claude-code-action.
-      # A failed server start is the most common silent failure mode — this
-      # surfaces the error in the job log rather than hiding it inside the action.
-      - name: Verify MCP server starts
-        if: always() && steps.gate.outputs.total != '0' && steps.cve_list.outputs.ids != ''
-        run: |
-          timeout 15 python -m cve_intel.mcp_server --help 2>&1 || \
-          timeout 15 python -c "import cve_intel.mcp_server; print('MCP server importable')"
+      # Post an @claude mention comment so the Claude Code workflow (claude.yml)
+      # picks it up and generates the advisory using the cve-intel MCP server.
+      # That workflow already has Python deps and MCP config installed and is not
+      # subject to the oauth token workflow-file validation restriction that blocked
+      # the inline claude-code-action approach.
+      # Only runs on pull_request events — workflow_dispatch has no PR to comment on.
+      - name: Request Claude advisory via PR comment
+        if: always() && github.event_name == 'pull_request' && steps.gate.outputs.total != '0' && steps.cve_list.outputs.ids != ''
         continue-on-error: true
-
-      # -----------------------------------------------------------------------
-      # Advisory narrative — runs claude-code-action inline so the advisory is
-      # generated and posted BEFORE the enforce gate step runs.
-      # Works on both PR and workflow_dispatch runs.
-      - name: Generate Claude advisory
-        if: always() && steps.gate.outputs.total != '0' && steps.cve_list.outputs.ids != ''
-        continue-on-error: true
-        uses: anthropics/claude-code-action@6e2bd52842c65e914eba5c8badd17560bd26b5de  # v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
-          additional_permissions: |
-            actions: read
-          display_report: true
-          show_full_output: true
-          prompt: |
-            Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
-
-            Use the cve-intel MCP server to produce a security advisory.
-
-            CVE IDs from scan: ${{ steps.cve_list.outputs.ids }}
-
-            Instructions:
-            1. Call `batch_triage_cves` with all CVE IDs above
-            2. For each CRITICAL/HIGH finding call `lookup_technique` and `get_community_sigma_rules`
-            3. Post a single advisory comment with: ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package + version)
         env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TOTAL: ${{ steps.gate.outputs.total }}
+          CRITICAL: ${{ steps.gate.outputs.critical_count }}
+          CVE_IDS: ${{ steps.cve_list.outputs.ids }}
+        run: |
+          BODY=$(printf '@claude Security scan complete — **%s critical** / **%s total** CVE(s) found.\n\nUse the cve-intel MCP server to generate a security advisory:\n1. Call `batch_triage_cves` with: %s\n2. For each CRITICAL/HIGH finding call `lookup_technique` and `get_community_sigma_rules`\n3. Reply with a ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package → fixed version)\n\n_Posted automatically by the Security Triage workflow._' \
+            "${CRITICAL}" "${TOTAL}" "${CVE_IDS}")
+          gh pr comment "${PR_NUMBER}" --body "${BODY}"
 
       # -----------------------------------------------------------------------
       - name: Upload triage artifacts
