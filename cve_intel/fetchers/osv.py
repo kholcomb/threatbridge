@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from cve_intel.config import settings
-from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference
+from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference, score_to_severity
 
 logger = logging.getLogger(__name__)
 
@@ -275,22 +275,25 @@ def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:
         version = "2.0"
 
     # Use the cvss library to calculate the base score
+    base_score: float | None = None
     try:
         if version in ("3.0", "3.1"):
             from cvss import CVSS3
             c = CVSS3(vector)
             base_score = float(c.base_score)
         elif version == "4.0":
-            # cvss library may not support v4; fall back to vector-only parse
-            base_score = _score_from_vector_fields(raw_vector, version)
+            from cvss import CVSS4
+            c = CVSS4(vector)
+            base_score = float(c.base_score)
         else:
             from cvss import CVSS2
             c = CVSS2(vector)
             base_score = float(c.base_score)
     except Exception:
-        base_score = _score_from_vector_fields(raw_vector, version)
+        logger.warning("Could not calculate CVSS score from vector %r — skipping entry", vector)
+        return None
 
-    severity = _score_to_severity(base_score)
+    severity = score_to_severity(base_score)
 
     # Parse individual vector fields
     fields: dict[str, str] = {}
@@ -315,18 +318,3 @@ def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:
     )
 
 
-def _score_from_vector_fields(raw_vector: str, version: str) -> float:
-    """Fallback: return 0.0 if we can't calculate a score."""
-    return 0.0
-
-
-def _score_to_severity(score: float) -> CVSSSeverity:
-    if score == 0.0:
-        return CVSSSeverity.NONE
-    if score < 4.0:
-        return CVSSSeverity.LOW
-    if score < 7.0:
-        return CVSSSeverity.MEDIUM
-    if score < 9.0:
-        return CVSSSeverity.HIGH
-    return CVSSSeverity.CRITICAL

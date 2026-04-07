@@ -15,7 +15,7 @@ from dateutil import parser as dateutil_parser
 logger = logging.getLogger(__name__)
 
 from cve_intel.config import settings
-from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference
+from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference, score_to_severity
 
 NVD_BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
@@ -189,32 +189,23 @@ class NVDFetcher:
         return result
 
     def _build_cvss(self, d: dict, version: str) -> CVSSData:
-        severity_raw = d.get("baseSeverity") or d.get("baseScore", "")
-        if isinstance(severity_raw, (int, float)):
-            score = float(severity_raw)
-            if score == 0:
-                severity = CVSSSeverity.NONE
-            elif score < 4:
-                severity = CVSSSeverity.LOW
-            elif score < 7:
-                severity = CVSSSeverity.MEDIUM
-            elif score < 9:
-                severity = CVSSSeverity.HIGH
-            else:
-                severity = CVSSSeverity.CRITICAL
-        else:
+        base_score = float(d.get("baseScore", 0.0))
+        severity_raw = d.get("baseSeverity", "")
+        if severity_raw:
             try:
                 severity = CVSSSeverity(str(severity_raw).upper())
             except ValueError:
                 logger.warning(
-                    "Unrecognized CVSS severity %r, defaulting to MEDIUM", severity_raw
+                    "Unrecognized CVSS severity %r, deriving from score", severity_raw
                 )
-                severity = CVSSSeverity.MEDIUM
+                severity = score_to_severity(base_score)
+        else:
+            severity = score_to_severity(base_score)
 
         return CVSSData(
             version=version,
             vector_string=d.get("vectorString", ""),
-            base_score=float(d.get("baseScore", 0.0)),
+            base_score=base_score,
             base_severity=severity,
             attack_vector=d.get("attackVector"),
             attack_complexity=d.get("attackComplexity"),

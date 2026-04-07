@@ -180,15 +180,36 @@ def parse_sarif(data: dict) -> list[ScannerFinding]:
             if fixed_version:
                 fixed_version = str(fixed_version)
 
-            # Keep the richer finding if we've already seen this CVE
+            # Merge findings for the same CVE: prefer package info from the first
+            # rich finding, but always carry forward the best fix version seen.
             existing = findings.get(cve_id)
-            if existing is None or (package and not existing.package):
+            if existing is None:
                 findings[cve_id] = ScannerFinding(
                     cve_id=cve_id,
                     package=package,
                     installed_version=installed_version,
-                    fixed_version=fixed_version or (existing.fixed_version if existing else None),
+                    fixed_version=fixed_version,
                 )
+            else:
+                best_fix = fixed_version or existing.fixed_version
+                if package and not existing.package:
+                    # New finding has package context the existing one lacks — replace,
+                    # preserving the best fix version from either occurrence.
+                    findings[cve_id] = ScannerFinding(
+                        cve_id=cve_id,
+                        package=package,
+                        installed_version=installed_version,
+                        fixed_version=best_fix,
+                    )
+                elif best_fix != existing.fixed_version:
+                    # Same or no package context, but a better fix version appeared —
+                    # update in place without replacing the existing package info.
+                    findings[cve_id] = ScannerFinding(
+                        cve_id=cve_id,
+                        package=existing.package,
+                        installed_version=existing.installed_version,
+                        fixed_version=best_fix,
+                    )
 
     return list(findings.values())
 
