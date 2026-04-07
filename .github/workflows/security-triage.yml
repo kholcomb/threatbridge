@@ -13,6 +13,10 @@ permissions:
   security-events: write      # upload-sarif to GitHub Security tab
   actions: read               # claude-code-action reads CI results
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   # Pinned ATT&CK version — must match ATTACK_VERSION in cve_intel/fetchers/attack_data.py.
   # Update both together when upgrading to a new ATT&CK release.
@@ -91,6 +95,7 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.11"
+          cache: 'pip'
 
       # -----------------------------------------------------------------------
       # Cache only the ATT&CK STIX bundle — content is immutable at a pinned
@@ -128,7 +133,6 @@ jobs:
           cve-intel batch scan-results.sarif \
             --format sarif \
             --output sarif-results/ \
-            --no-enrich \
             ${{ vars.SARIF_POLICY_ARGS }}
 
           if [ ! -f sarif-results/results.sarif.json ]; then
