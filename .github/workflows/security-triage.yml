@@ -49,8 +49,13 @@ jobs:
 
       # Scan the resolved lockfile against OSV.dev — covers NVD, GitHub Advisory
       # Database, and ecosystem-specific advisories in a single query.
+      # Exit code 1 = vulnerabilities found (expected); exit code 2+ = scanner error.
       - name: Scan uv.lock
-        run: osv-scanner scan --lockfile uv.lock --format sarif --output scan-results.sarif || true
+        run: |
+          osv-scanner scan --lockfile uv.lock --format sarif --output scan-results.sarif || {
+            code=$?
+            [ $code -eq 1 ] || exit $code
+          }
 
       - name: Upload scan results
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
