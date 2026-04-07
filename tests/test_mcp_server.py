@@ -662,3 +662,217 @@ def test_full_tool_pipeline_fetch_then_triage(mocker, sample_cve_record, mock_at
     assert triage_result["cve_id"] == "CVE-2024-21762"
     # cvss_score is not a top-level key in either result — both absent is consistent
     assert fetch_result.get("cvss_score") == triage_result.get("cvss_score")
+
+
+# ---------------------------------------------------------------------------
+# triage_cve — exploitation signal and CVSS-driven priority
+# ---------------------------------------------------------------------------
+
+def test_triage_cve_critical_for_kev_active(mocker, sample_cve_record, mock_attack_data):
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData, SSVCScore
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        return_value=VulnrichmentData(
+            cve_id="CVE-2024-21762",
+            available=True,
+            in_kev=True,
+            kev_date_added="2024-02-09",
+            ssvc=SSVCScore(exploitation="active", automatable="yes", technical_impact="total"),
+        ),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("CVE-2024-21762", ctx)
+
+    assert result["priority_tier"] == "CRITICAL"
+    assert result["exploitation"]["in_kev"] is True
+    assert result["exploitation"]["ssvc_exploitation"] == "active"
+    assert "techniques" in result
+    assert "triage_notes" in result
+    assert any("KEV" in note for note in result["triage_notes"])
+
+
+def test_triage_cve_attack_requirements_from_cvss(mocker, sample_cve_record, mock_attack_data):
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        return_value=VulnrichmentData(cve_id="CVE-2024-21762"),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("CVE-2024-21762", ctx)
+
+    req = result["attack_requirements"]
+    # sample_cve_record for CVE-2024-21762 has AV:N/PR:N/UI:N
+    assert req["network_access_required"] is True
+    assert req["authentication_required"] is False
+    assert req["user_interaction_required"] is False
+
+
+def test_triage_cve_affected_packages_parsed(mocker, mock_attack_data):
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData
+    from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch
+    from datetime import datetime
+
+    record = CVERecord(
+        cve_id="CVE-2024-99999",
+        published=datetime(2024, 1, 1),
+        last_modified=datetime(2024, 1, 1),
+        descriptions={"en": "Test vulnerability in requests library."},
+        cvss=[CVSSData(
+            version="3.1",
+            vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            base_score=9.8,
+            base_severity=CVSSSeverity.CRITICAL,
+            attack_vector="NETWORK",
+            attack_complexity="LOW",
+            privileges_required="NONE",
+            user_interaction="NONE",
+        )],
+        cpe_matches=[CPEMatch(
+            criteria="cpe:2.3:a:python-requests:requests:*:*:*:*:*:*:*:*",
+            version_start_including="2.0.0",
+            version_end_excluding="2.28.2",
+            vulnerable=True,
+        )],
+    )
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=record)
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        return_value=VulnrichmentData(cve_id="CVE-2024-99999"),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("CVE-2024-99999", ctx)
+
+    pkgs = result["affected_packages"]
+    assert len(pkgs) == 1
+    assert pkgs[0]["package"] == "requests"
+    assert "2.28.2" in pkgs[0]["version_ranges"][0]["end_excluding"]
+
+
+def test_triage_cve_handles_missing_vulnrichment(mocker, sample_cve_record, mock_attack_data):
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", return_value=sample_cve_record)
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        return_value=VulnrichmentData(cve_id="CVE-2024-21762", available=False),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import triage_cve
+    result = triage_cve("CVE-2024-21762", ctx)
+
+    assert result["priority_tier"] in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+    assert result["exploitation"]["available"] is False
+
+
+# ---------------------------------------------------------------------------
+# batch_triage_cves — priority ordering and error handling
+# ---------------------------------------------------------------------------
+
+def test_batch_triage_cves_sorted_by_priority(mocker, mock_attack_data):
+    from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData, SSVCScore
+    from datetime import datetime
+
+    def _make_record(cve_id, score):
+        return CVERecord(
+            cve_id=cve_id,
+            published=datetime(2024, 1, 1),
+            last_modified=datetime(2024, 1, 1),
+            descriptions={"en": "Test."},
+            cvss=[CVSSData(
+                version="3.1",
+                vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                base_score=score,
+                base_severity=CVSSSeverity.CRITICAL if score >= 9 else CVSSSeverity.HIGH,
+                attack_vector="NETWORK",
+                privileges_required="NONE",
+                user_interaction="NONE",
+                attack_complexity="LOW",
+            )],
+        )
+
+    records = {
+        "CVE-2024-0001": _make_record("CVE-2024-0001", 5.0),
+        "CVE-2024-0002": _make_record("CVE-2024-0002", 9.8),
+        "CVE-2024-0003": _make_record("CVE-2024-0003", 7.5),
+    }
+
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_cve_record",
+        side_effect=lambda cve_id: records[cve_id],
+    )
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        side_effect=lambda cve_id: VulnrichmentData(
+            cve_id=cve_id,
+            available=True,
+            in_kev=(cve_id == "CVE-2024-0003"),
+            ssvc=SSVCScore(exploitation="active" if cve_id == "CVE-2024-0003" else "none"),
+        ),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"], ctx)
+
+    assert result["failed"] == []
+    tiers = [r["priority_tier"] for r in result["results"]]
+    critical_idx = tiers.index("CRITICAL")
+    high_idx = tiers.index("HIGH")
+    assert critical_idx < high_idx
+    assert result["summary"]["CRITICAL"] == 1
+    assert result["summary"]["HIGH"] == 1
+
+
+def test_batch_triage_cves_handles_fetch_failure(mocker, mock_attack_data):
+    from cve_intel.fetchers.nvd import NVDError
+    from cve_intel.fetchers.vulnrichment import VulnrichmentData
+    from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity
+    from datetime import datetime
+
+    good_record = CVERecord(
+        cve_id="CVE-2024-0002",
+        published=datetime(2024, 1, 1),
+        last_modified=datetime(2024, 1, 1),
+        descriptions={"en": "Test."},
+        cvss=[CVSSData(
+            version="3.1", vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            base_score=7.5, base_severity=CVSSSeverity.HIGH,
+            attack_vector="NETWORK", privileges_required="NONE",
+            user_interaction="NONE", attack_complexity="LOW",
+        )],
+    )
+
+    def _fetch(cve_id):
+        if cve_id == "CVE-2024-0001":
+            raise NVDError("NVD unavailable")
+        return good_record
+
+    mocker.patch("cve_intel.mcp_server.fetch_cve_record", side_effect=_fetch)
+    mocker.patch(
+        "cve_intel.mcp_server.fetch_vulnrichment",
+        return_value=VulnrichmentData(cve_id="CVE-2024-0002"),
+    )
+    mock_attack_data.all_technique_ids = []
+    ctx = _make_ctx(mock_attack_data)
+
+    from cve_intel.mcp_server import batch_triage_cves
+    result = batch_triage_cves(["CVE-2024-0001", "CVE-2024-0002"], ctx)
+
+    assert len(result["results"]) == 1
+    assert result["results"][0]["cve_id"] == "CVE-2024-0002"
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["cve_id"] == "CVE-2024-0001"
