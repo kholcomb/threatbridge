@@ -179,26 +179,11 @@ jobs:
             echo "No CVE IDs found in scan results (findings may be GHSA/PYSEC only)."
           fi
 
-      # -----------------------------------------------------------------------
-      # Post an @claude mention comment so the Claude Code workflow (claude.yml)
-      # picks it up and generates the advisory using the cve-intel MCP server.
-      # That workflow already has Python deps and MCP config installed and is not
-      # subject to the oauth token workflow-file validation restriction that blocked
-      # the inline claude-code-action approach.
-      # Only runs on pull_request events — workflow_dispatch has no PR to comment on.
-      - name: Request Claude advisory via PR comment
-        if: always() && github.event_name == 'pull_request' && steps.gate.outputs.total != '0' && steps.cve_list.outputs.ids != ''
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          TOTAL: ${{ steps.gate.outputs.total }}
-          CRITICAL: ${{ steps.gate.outputs.critical_count }}
-          CVE_IDS: ${{ steps.cve_list.outputs.ids }}
-        run: |
-          BODY=$(printf '@claude Security scan complete — **%s critical** / **%s total** CVE(s) found.\n\nUse the cve-intel MCP server to generate a security advisory:\n1. Call `batch_triage_cves` with: %s\n2. For each CRITICAL/HIGH finding call `lookup_technique` and `get_community_sigma_rules`\n3. Reply with a ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package → fixed version)\n\n_Posted automatically by the Security Triage workflow._' \
-            "${CRITICAL}" "${TOTAL}" "${CVE_IDS}")
-          gh pr comment "${PR_NUMBER}" --body "${BODY}"
+      # Advisory generation is handled by security-advisory.yml, which triggers
+      # via workflow_run on completion of this workflow. That approach avoids
+      # both the GITHUB_TOKEN comment-trigger restriction and the oauth
+      # workflow-file validation restriction (workflow_run always executes
+      # on the default branch).
 
       # -----------------------------------------------------------------------
       - name: Upload triage artifacts
