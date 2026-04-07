@@ -216,7 +216,10 @@ def render_sarif(
             "locations": [],
         }
 
-        # Populate package location from scanner input when available
+        # Populate package location from scanner input when available.
+        # GitHub Code Scanning requires at least one location on every result;
+        # fall back to a logical location keyed on the CVE ID when no package
+        # context is present.
         finding = pkgs.get(cve_id)
         if finding and finding.package:
             fqn = finding.package
@@ -227,6 +230,14 @@ def render_sarif(
                     "name": finding.package,
                     "fullyQualifiedName": fqn,
                     "kind": "package",
+                }]
+            }]
+        else:
+            result_entry["locations"] = [{
+                "logicalLocations": [{
+                    "name": cve_id,
+                    "fullyQualifiedName": cve_id,
+                    "kind": "module",
                 }]
             }]
 
