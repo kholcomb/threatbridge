@@ -62,7 +62,7 @@ jobs:
   # by the scan job (or any other job that uploads scan-results/scan-results.sarif)
   # and runs the deterministic gate + Claude advisory.
   triage:
-    name: Gate → Narrative
+    name: Security Gate
     needs: scan
     runs-on: ubuntu-latest
     timeout-minutes: 30
