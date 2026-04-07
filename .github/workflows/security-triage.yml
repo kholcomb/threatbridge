@@ -110,10 +110,10 @@ jobs:
       # Level assignment uses CVSS score, KEV status, and SSVC exploitation signals.
       # Defaults: error = CVSS >= 9.0 OR KEV-listed OR SSVC exploitation=active.
       # Override thresholds via SARIF_POLICY_ARGS repo variable (see batch --help).
-      # The gate fails if any result has level=error.
+      # NOTE: This step records findings but does NOT fail the job — the Enforce
+      # gate step below does that after Claude has had a chance to comment.
       - name: Deterministic SARIF gate
         id: gate
-        if: env.FAIL_ON_CRITICAL != 'false'
         run: |
           mkdir -p sarif-results
           cve-intel batch scan-results.sarif \
@@ -125,6 +125,7 @@ jobs:
           if [ ! -f sarif-results/results.sarif.json ]; then
             echo "No CVE findings in scan results — passing."
             echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "critical_count=0" >> "$GITHUB_OUTPUT"
             echo "## Security Triage" >> "$GITHUB_STEP_SUMMARY"
             echo "No CVE findings." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -135,15 +136,10 @@ jobs:
             sarif-results/results.sarif.json)
 
           echo "total=${TOTAL}" >> "$GITHUB_OUTPUT"
+          echo "critical_count=${CRITICAL_COUNT}" >> "$GITHUB_OUTPUT"
           echo "## Security Triage" >> "$GITHUB_STEP_SUMMARY"
           echo "**${TOTAL} CVE(s) found. Gate result:** ${CRITICAL_COUNT} critical (CVSS ≥ 9.0)" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$CRITICAL_COUNT" -gt 0 ]; then
-            echo "::error::${CRITICAL_COUNT} critical CVE(s) detected (CVSS ≥ 9.0) — review the Security tab."
-            exit 1
-          fi
         env:
-          FAIL_ON_CRITICAL: ${{ vars.FAIL_ON_CRITICAL || 'true' }}
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
       # -----------------------------------------------------------------------
@@ -219,6 +215,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
+          show_full_output: "true"
 
       # -----------------------------------------------------------------------
       - name: Upload triage artifacts
@@ -228,3 +225,12 @@ jobs:
           name: security-triage
           path: sarif-results/
           retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Enforce gate — fails the job AFTER Claude has posted its advisory.
+      # Separated from the SARIF gate step so Claude always gets to comment first.
+      - name: Enforce gate
+        if: always() && vars.FAIL_ON_CRITICAL != 'false' && steps.gate.outputs.critical_count != '' && steps.gate.outputs.critical_count != '0'
+        run: |
+          echo "::error::${{ steps.gate.outputs.critical_count }} critical CVE(s) detected (CVSS ≥ 9.0) — review the Security tab and Claude advisory above."
+          exit 1
