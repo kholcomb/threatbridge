@@ -195,7 +195,8 @@ def test_malformed_cvss_severity_logs_warning(caplog):
         cvss_list = fetcher._parse_cvss(raw_metrics)
 
     assert len(cvss_list) == 1
-    assert cvss_list[0].base_severity.value == "MEDIUM"
+    # Unrecognized baseSeverity falls back to score_to_severity(); score=9.8 → CRITICAL
+    assert cvss_list[0].base_severity.value == "CRITICAL"
     assert any(
         "ULTRA" in record.message and record.levelname == "WARNING"
         for record in caplog.records

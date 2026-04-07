@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from cve_intel.config import settings
-from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference
+from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference, score_to_severity
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +293,7 @@ def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:
         logger.warning("Could not calculate CVSS score from vector %r — skipping entry", vector)
         return None
 
-    severity = _score_to_severity(base_score)
+    severity = score_to_severity(base_score)
 
     # Parse individual vector fields
     fields: dict[str, str] = {}
@@ -318,13 +318,3 @@ def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:
     )
 
 
-def _score_to_severity(score: float) -> CVSSSeverity:
-    if score == 0.0:
-        return CVSSSeverity.NONE
-    if score < 4.0:
-        return CVSSSeverity.LOW
-    if score < 7.0:
-        return CVSSSeverity.MEDIUM
-    if score < 9.0:
-        return CVSSSeverity.HIGH
-    return CVSSSeverity.CRITICAL
