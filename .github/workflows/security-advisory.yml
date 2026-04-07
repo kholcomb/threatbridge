@@ -1,0 +1,107 @@
+name: Security Advisory
+
+# Triggers when Security Triage completes on a pull request.
+# workflow_run always executes on the default branch, which means:
+#   1. The claude-code-action oauth workflow-file validation always passes.
+#   2. No GITHUB_TOKEN trigger restriction (no comment posting needed).
+# The head_sha checkout gives access to the PR's .mcp.ci.json and cve_intel
+# package so the MCP server can start correctly.
+on:
+  workflow_run:
+    workflows: ["Security Triage"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+env:
+  ATTACK_VERSION: "ATT&CK-v18.1"
+
+jobs:
+  advisory:
+    name: Generate Advisory
+    # Only run for PR-triggered triage runs; skip if no PR is associated.
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.pull_requests[0] != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Check out the PR's code (not master) so .mcp.ci.json and the
+      # cve_intel package reflect what was actually scanned.
+      - name: Checkout PR code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Cache ATT&CK bundle
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7  # v5.0.4
+        with:
+          path: ~/.cache/cve-intel/attack
+          key: attack-${{ env.ATTACK_VERSION }}
+
+      - name: Install project dependencies
+        run: pip install -e "." --quiet
+
+      # Download the enriched SARIF produced by the triage job.
+      - name: Download triage artifacts
+        id: artifacts
+        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806  # v4.1.9
+        with:
+          name: security-triage
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: sarif-results/
+        continue-on-error: true
+
+      - name: Extract CVE IDs from triage output
+        id: cve_list
+        run: |
+          SARIF="sarif-results/results.sarif.json"
+          if [ ! -f "${SARIF}" ]; then
+            echo "No triage SARIF found — nothing to report."
+            { echo "ids="; echo "total=0"; echo "critical=0"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CVE_IDS=$(jq -r '.runs[].results[].ruleId' "${SARIF}" 2>/dev/null \
+            | grep -E '^CVE-[0-9]{4}-[0-9]+$' | sort -u | tr '\n' ' ')
+          TOTAL=$(jq '[.runs[].results[]] | length' "${SARIF}")
+          CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' "${SARIF}")
+          { echo "ids=${CVE_IDS}"; echo "total=${TOTAL}"; echo "critical=${CRITICAL}"; } >> "$GITHUB_OUTPUT"
+
+      - name: Generate Claude advisory
+        if: steps.cve_list.outputs.ids != ''
+        uses: anthropics/claude-code-action@6e2bd52842c65e914eba5c8badd17560bd26b5de  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
+          additional_permissions: |
+            actions: read
+          display_report: true
+          show_full_output: true
+          pr_number: ${{ github.event.workflow_run.pull_requests[0].number }}
+          prompt: |
+            Security scan complete — **${{ steps.cve_list.outputs.critical }} critical** / **${{ steps.cve_list.outputs.total }} total** CVE(s) found.
+
+            Use the cve-intel MCP server to produce a security advisory.
+
+            CVE IDs from scan: ${{ steps.cve_list.outputs.ids }}
+
+            Instructions:
+            1. Call `batch_triage_cves` with all CVE IDs above
+            2. For each CRITICAL/HIGH finding call `lookup_technique` and `get_community_sigma_rules`
+            3. Post a single advisory comment with: ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package + fixed version)
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
