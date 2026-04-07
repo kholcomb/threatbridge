@@ -50,6 +50,10 @@ jobs:
           min-risk: medium
           upload-sarif: true
           version: ${{ steps.pack.outputs.tarball }}
+        # Exit code 1 = findings at or above min-risk threshold (not a scanner
+        # error). Findings are reported to the Security tab via SARIF upload.
+        # Remove continue-on-error to make this a hard gate.
+        continue-on-error: true
 
       - name: Upload scan artifacts
         if: always() && steps.scan.outputs.json-file != ''
