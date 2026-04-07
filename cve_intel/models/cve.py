@@ -13,6 +13,27 @@ class CVSSSeverity(str, Enum):
     CRITICAL = "CRITICAL"
 
 
+def score_to_severity(score: float) -> CVSSSeverity:
+    """Map a CVSS base score to a CVSSSeverity using NIST standard thresholds.
+
+    Thresholds (CVSS v3.x / v4.x):
+      0.0       → NONE
+      0.1–3.9   → LOW
+      4.0–6.9   → MEDIUM
+      7.0–8.9   → HIGH
+      9.0–10.0  → CRITICAL
+    """
+    if score == 0.0:
+        return CVSSSeverity.NONE
+    if score < 4.0:
+        return CVSSSeverity.LOW
+    if score < 7.0:
+        return CVSSSeverity.MEDIUM
+    if score < 9.0:
+        return CVSSSeverity.HIGH
+    return CVSSSeverity.CRITICAL
+
+
 class CVSSData(BaseModel):
     version: str
     vector_string: str
