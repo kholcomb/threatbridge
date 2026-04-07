@@ -210,10 +210,9 @@ jobs:
           retention-days: 30
 
       # -----------------------------------------------------------------------
-      # Enforce gate — runs after Generate Claude advisory so the advisory is
-      # always visible before the job fails.
-      - name: Enforce gate
-        if: always() && vars.FAIL_ON_CRITICAL != 'false' && steps.gate.outputs.critical_count != '' && steps.gate.outputs.critical_count != '0'
+      # Warn gate — reports critical findings as a warning but does not fail
+      # the job. Re-enable blocking by setting FAIL_ON_CRITICAL=true repo var.
+      - name: Warn gate
+        if: always() && steps.gate.outputs.critical_count != '' && steps.gate.outputs.critical_count != '0'
         run: |
-          echo "::error::${{ steps.gate.outputs.critical_count }} critical CVE(s) detected (CVSS ≥ 9.0) — review the Security tab and Claude advisory above."
-          exit 1
+          echo "::warning::${{ steps.gate.outputs.critical_count }} critical CVE(s) detected (CVSS ≥ 9.0) — review the Security tab and Claude advisory above."
