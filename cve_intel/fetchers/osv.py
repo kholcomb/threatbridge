@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from cve_intel.config import settings
-from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, Reference
+from cve_intel.models.cve import CVERecord, CVSSData, CVSSSeverity, CPEMatch, Reference
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,8 @@ class OSVFetcher:
             if r.get("url")
         ]
 
+        cpe_matches = _extract_cpe_matches(raw.get("affected", []))
+
         return CVERecord(
             cve_id=cve_id,
             source_identifier="osv.dev",
@@ -132,7 +134,7 @@ class OSVFetcher:
             descriptions={"en": description[:2000]} if description else {},
             cvss=cvss_list,
             weaknesses=weaknesses,
-            cpe_matches=[],
+            cpe_matches=cpe_matches,
             references=references,
         )
 
@@ -182,6 +184,71 @@ def _extract_cwes(raw: dict[str, Any]) -> list[str]:
                     cwes.append(cwe)
 
     return list(dict.fromkeys(cwes))  # deduplicate, preserve order
+
+
+def _extract_cpe_matches(affected: list[dict[str, Any]]) -> list[CPEMatch]:
+    """Synthesise CPEMatch objects from OSV affected[] entries.
+
+    OSV uses Package URLs (purl) instead of CPE 2.3.  We construct a
+    wildcard CPE from the package name and ecosystem and populate version
+    bounds from SEMVER/ECOSYSTEM ranges.  The vendor field is set to '*'
+    since OSV does not expose vendor.  Entries are tagged with
+    source_identifier="osv.dev" via the containing CVERecord.
+
+    Only SEMVER and ECOSYSTEM range types are processed; GIT ranges are
+    skipped because their commit hashes are not comparable to versions.
+    """
+    matches: list[CPEMatch] = []
+    for entry in affected:
+        pkg = entry.get("package", {})
+        name = pkg.get("name", "").lower().replace(" ", "_") or "*"
+        ecosystem = pkg.get("ecosystem", "").lower()
+
+        # Derive a CPE part hint: 'a' (application) covers most ecosystems.
+        # 'o' (OS) for distro-level ecosystems like Debian, Ubuntu, Alpine.
+        os_ecosystems = {"debian", "ubuntu", "alpine", "rocky linux", "alma linux",
+                         "centos", "rhel", "red hat", "amazon linux", "suse", "opensuse"}
+        part = "o" if any(os_eco in ecosystem for os_eco in os_ecosystems) else "a"
+
+        base_cpe = f"cpe:2.3:{part}:*:{name}:*:*:*:*:*:*:*:*"
+
+        for range_entry in entry.get("ranges", []):
+            range_type = range_entry.get("type", "")
+            if range_type not in ("SEMVER", "ECOSYSTEM"):
+                continue
+
+            introduced: str | None = None
+            fixed: str | None = None
+            last_affected: str | None = None
+
+            for event in range_entry.get("events", []):
+                if "introduced" in event:
+                    introduced = event["introduced"] or None
+                elif "fixed" in event:
+                    fixed = event["fixed"] or None
+                elif "last_affected" in event:
+                    last_affected = event["last_affected"] or None
+
+            # Skip degenerate ranges that carry no useful version info
+            if introduced == "0" and not fixed and not last_affected:
+                # Entire version history is vulnerable — emit a bare CPE
+                matches.append(CPEMatch(criteria=base_cpe, vulnerable=True))
+                continue
+
+            matches.append(CPEMatch(
+                criteria=base_cpe,
+                version_start_including=introduced if introduced and introduced != "0" else None,
+                version_end_excluding=fixed,
+                version_end_including=last_affected,
+                vulnerable=True,
+            ))
+
+        # If there are no ranges but versions are listed, skip — we'd need to
+        # emit one CPEMatch per version which is too verbose.
+        if not entry.get("ranges") and name != "*":
+            matches.append(CPEMatch(criteria=base_cpe, vulnerable=True))
+
+    return matches
 
 
 def _parse_cvss_vector(vector: str, entry_type: str) -> CVSSData | None:

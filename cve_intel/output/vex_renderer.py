@@ -30,8 +30,11 @@ Re-ingest on subsequent runs to carry forward 'not_affected' decisions:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from cve_intel import __version__
 
@@ -150,8 +153,15 @@ def render_vex(
     # since they were filtered before triage, but guard for safety).
     triaged_ids = {r.cve_id for r in results}
     for decision in prior_not_affected.values():
-        if decision.cve_id not in triaged_ids and decision.raw:
-            vulnerabilities.append(decision.raw)
+        if decision.cve_id not in triaged_ids:
+            if decision.raw:
+                vulnerabilities.append(decision.raw)
+            else:
+                logger.warning(
+                    "Prior not_affected decision for %s has no raw data — "
+                    "dropping from VEX output",
+                    decision.cve_id,
+                )
 
     return {
         "bomFormat": "CycloneDX",

@@ -57,13 +57,14 @@ def test_lookup_technique_returns_technique(mock_attack_data):
     assert result["technique_id"] == "T1190"
 
 
-def test_lookup_technique_raises_for_unknown(mock_attack_data):
+def test_lookup_technique_returns_error_for_unknown(mock_attack_data):
     mock_attack_data.get_technique.return_value = None
     ctx = _make_ctx(mock_attack_data)
 
     from cve_intel.mcp_server import lookup_technique
-    with pytest.raises(ValueError, match="not found"):
-        lookup_technique("T9999", ctx)
+    result = lookup_technique("T9999", ctx)
+    assert "error" in result
+    assert "T9999" in result["error"]
 
 
 # ---------------------------------------------------------------------------

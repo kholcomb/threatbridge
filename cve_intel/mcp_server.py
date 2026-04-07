@@ -417,10 +417,12 @@ def lookup_technique(technique_id: str, ctx: Context) -> dict[str, Any]:
         return {"error": "ATT&CK data unavailable — server failed to load bundle at startup"}
     tech = attack_data.get_technique(technique_id.upper())
     if tech is None:
-        raise ValueError(
-            f"Technique '{technique_id}' not found in ATT&CK dataset. "
-            f"Check the ID format (e.g. T1190 or T1059.001)."
-        )
+        return {
+            "error": (
+                f"Technique '{technique_id}' not found in ATT&CK dataset. "
+                f"Check the ID format (e.g. T1190 or T1059.001)."
+            )
+        }
     return tech.model_dump(mode="json")
 
 
@@ -750,6 +752,7 @@ def batch_triage_cves(cve_ids: list[str], ctx: Context) -> dict[str, Any]:
         except NVDError as exc:
             failed.append({"cve_id": cve_id, "error": str(exc), "error_type": "unexpected"})
         except Exception as exc:
+            logger.exception("Unexpected error triaging %s", cve_id)
             failed.append({"cve_id": cve_id, "error": f"Unexpected error: {exc}", "error_type": "unexpected"})
 
     results.sort(key=lambda r: _PRIORITY_ORDER.get(r["priority_tier"], 99))

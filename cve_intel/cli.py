@@ -1,5 +1,6 @@
 """CLI entry point for cve-intel."""
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -331,7 +332,7 @@ def batch(
             ]
 
     if not cve_ids:
-        console.print("[yellow]No CVE IDs found in input.[/yellow]")
+        err_console.print("[yellow]No CVE IDs found in input.[/yellow]")
         return
 
     # --- VEX re-ingestion: filter not_affected CVEs from prior run ---
@@ -339,17 +340,22 @@ def batch(
     suppressed: set[str] = set()
     if vex_in:
         from cve_intel.fetchers.scanner_input import load_vex
-        prior_decisions = load_vex(Path(vex_in))
+        try:
+            prior_decisions = load_vex(Path(vex_in))
+        except (json.JSONDecodeError, OSError) as exc:
+            console.print(f"[red]Cannot load VEX file {vex_in!r}: {exc}[/red]")
+            sys.exit(1)
         suppressed = {d.cve_id for d in prior_decisions if d.state == "not_affected"}
         if suppressed:
+            cve_ids = [c.upper() for c in cve_ids]
             cve_ids = [c for c in cve_ids if c not in suppressed]
-            console.print(
+            err_console.print(
                 f"[dim]Skipped {len(suppressed)} not_affected CVE(s) from prior VEX: "
                 f"{', '.join(sorted(suppressed))}[/dim]"
             )
 
     detected = f" ({len(scanner_findings)} with package context)" if scanner_findings else ""
-    console.print(f"[dim]Loaded {len(cve_ids)} CVEs{detected}[/dim]")
+    err_console.print(f"[dim]Loaded {len(cve_ids)} CVEs{detected}[/dim]")
 
     load_prog = RichProgress()
     load_prog.start()
@@ -402,7 +408,9 @@ def batch(
                 progress.advance(task)
                 progress.update(task, description=f"[cyan]Processed {cid}")
                 try:
-                    results.append(future.result())
+                    results.append(future.result(timeout=120))
+                except concurrent.futures.TimeoutError:
+                    errors.append((cid, TimeoutError(f"{cid} timed out after 120s")))
                 except Exception as exc:
                     errors.append((cid, exc))
 
@@ -435,14 +443,14 @@ def batch(
             output_dir.mkdir(parents=True, exist_ok=True)
             sarif_file = output_dir / "results.sarif.json"
             sarif_file.write_text(_json.dumps(sarif_data, indent=2))
-            console.print(f"[dim]SARIF written to {sarif_file}[/dim]")
+            err_console.print(f"[dim]SARIF written to {sarif_file}[/dim]")
 
             # VEX written alongside SARIF automatically
             levels = assign_levels(results, policy=policy)
             vex_data = render_vex(results, sarif_levels=levels, findings=scanner_findings or None, prior_decisions=prior_decisions or None)
             vex_file = output_dir / "results.vex.json"
             vex_file.write_text(_json.dumps(vex_data, indent=2))
-            console.print(f"[dim]VEX  written to {vex_file}[/dim]")
+            err_console.print(f"[dim]VEX  written to {vex_file}[/dim]")
         else:
             click.echo(_json.dumps(sarif_data, indent=2))
 
@@ -462,17 +470,17 @@ def batch(
             if output_dir:
                 output_dir.mkdir(parents=True, exist_ok=True)
                 path = json_renderer.write_json(result, output_dir)
-                console.print(f"[dim]Written: {path}[/dim]")
+                err_console.print(f"[dim]Written: {path}[/dim]")
                 rule_paths = json_renderer.write_rules(result, output_dir / "rules")
                 for rp in rule_paths:
-                    console.print(f"[dim]Rule written to {rp}[/dim]")
+                    err_console.print(f"[dim]Rule written to {rp}[/dim]")
             else:
                 click.echo(json_renderer.render_json(result))
 
     summary = f"\n[green]Done.[/green] {len(results)} succeeded, {len(errors)} failed."
     if enrichment_failures:
         summary += f" [yellow]{enrichment_failures} enrichment failure(s) — rules/IOCs not generated.[/yellow]"
-    console.print(summary)
+    err_console.print(summary)
 
     # CI gate for non-SARIF formats (compute levels on the fly)
     if fail_on != "never":

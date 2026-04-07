@@ -123,10 +123,14 @@ def analyze(
 
         except ClaudeError as exc:
             # Degrade gracefully — surface warning through return value
-            msg = (
-                f"Claude enrichment unavailable: {exc}. "
-                "Set ANTHROPIC_API_KEY to enable AI-powered analysis."
-            )
+            exc_str = str(exc).lower()
+            if "api key" in exc_str or "authentication" in exc_str or "unauthorized" in exc_str:
+                advice = "Set ANTHROPIC_API_KEY to enable AI-powered analysis."
+            elif "rate limit" in exc_str or "429" in exc_str:
+                advice = "Claude rate limit reached — retry in a moment or reduce concurrency."
+            else:
+                advice = f"Check Claude API connectivity. Error: {exc}"
+            msg = f"Claude enrichment unavailable: {advice}"
             logger.warning(msg)
             warnings.append(msg)
             warnings.append(
