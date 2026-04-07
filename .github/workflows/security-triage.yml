@@ -97,7 +97,7 @@ jobs:
 
       # -----------------------------------------------------------------------
       - name: Install project dependencies
-        run: pip install -e ".[dev]" --quiet
+        run: pip install -e "." --quiet
 
       # -----------------------------------------------------------------------
       - name: Preflight check
