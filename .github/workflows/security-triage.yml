@@ -176,6 +176,7 @@ jobs:
           claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
           additional_permissions: |
             actions: read
+          display_report: true
           prompt: |
             Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
 
