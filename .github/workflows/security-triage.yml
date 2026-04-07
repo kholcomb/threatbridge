@@ -213,7 +213,7 @@ jobs:
             A final section listing any CVEs that could not be triaged (not found,
             reserved, or rate-limited) for manual review.
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
           show_full_output: "true"
 
