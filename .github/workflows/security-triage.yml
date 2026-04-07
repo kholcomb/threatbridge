@@ -20,7 +20,9 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Job 1: Scan — runs Grype against uv.lock to get exact pinned dep versions.
+  # Job 1: Scan — runs osv-scanner against uv.lock.
+  # osv-scanner queries OSV.dev which aggregates NVD, GitHub Advisory Database,
+  # and many other sources — broader coverage than Grype's internal DB alone.
   # Produces scan-results.sarif and uploads it as a workflow artifact for the
   # triage job. Swap this job out for any other SARIF-emitting scanner.
   scan:
@@ -32,13 +34,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Install Grype
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Install osv-scanner
+        run: |
+          gh release download v2.3.5 \
+            --repo google/osv-scanner \
+            --pattern "osv-scanner_linux_amd64" \
+            --dir /usr/local/bin
+          chmod +x /usr/local/bin/osv-scanner_linux_amd64
+          ln -s /usr/local/bin/osv-scanner_linux_amd64 /usr/local/bin/osv-scanner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Scan the resolved lockfile — this gives exact transitive dep versions,
-      # not just what's declared in pyproject.toml.
+      # Scan the resolved lockfile against OSV.dev — covers NVD, GitHub Advisory
+      # Database, and ecosystem-specific advisories in a single query.
       - name: Scan uv.lock
-        run: grype file:uv.lock --output sarif --file scan-results.sarif || true
+        run: osv-scanner scan --lockfile uv.lock --format sarif --output scan-results.sarif || true
 
       - name: Upload scan results
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
