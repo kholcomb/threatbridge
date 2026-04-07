@@ -52,7 +52,6 @@ jobs:
         run: cve-intel doctor
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # -----------------------------------------------------------------------
       - name: Install Grype
@@ -149,7 +148,7 @@ jobs:
                 vector is relevant given the deployment context, and a concrete remediation step
               - Any CVEs that were skipped (not found in NVD, reserved, etc.)
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--mcp-config .mcp.ci.json --max-turns 10"
 
       # -----------------------------------------------------------------------
