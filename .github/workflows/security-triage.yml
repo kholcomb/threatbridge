@@ -170,35 +170,20 @@ jobs:
         id: cve_list
         if: always() && steps.gate.outputs.total != '0'
         run: |
+          # Filter to CVE-* IDs only — osv-scanner also emits GHSA-* and PYSEC-*
+          # which cve-intel cannot look up.
           CVE_IDS=$(jq -r '.runs[].results[].ruleId' sarif-results/results.sarif.json 2>/dev/null \
-            | sort -u | tr '\n' ' ')
+            | grep -E '^CVE-[0-9]{4}-[0-9]+$' | sort -u | tr '\n' ' ')
           echo "ids=${CVE_IDS}" >> "$GITHUB_OUTPUT"
+          if [ -z "${CVE_IDS}" ]; then
+            echo "No CVE IDs found in scan results (findings may be GHSA/PYSEC only)."
+          fi
 
-      # -----------------------------------------------------------------------
-      # Advisory narrative — runs claude-code-action inline so the advisory is
-      # generated and posted BEFORE the enforce gate step runs.
-      # Works on both PR and workflow_dispatch runs.
-      - name: Generate Claude advisory
-        if: always() && steps.gate.outputs.total != '0'
-        continue-on-error: true
-        uses: anthropics/claude-code-action@6e2bd52842c65e914eba5c8badd17560bd26b5de  # v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--mcp-config .mcp.ci.json --max-turns 25"
-          additional_permissions: |
-            actions: read
-          display_report: true
-          prompt: |
-            Security scan complete — **${{ steps.gate.outputs.critical_count }} critical** / **${{ steps.gate.outputs.total }} total** CVE(s) found.
-
-            Use the cve-intel MCP server to produce a security advisory.
-
-            CVE IDs from scan: ${{ steps.cve_list.outputs.ids }}
-
-            Instructions:
-            1. Call `batch_triage_cves` with all CVE IDs above
-            2. For each CRITICAL/HIGH finding call `lookup_technique` and `get_community_sigma_rules`
-            3. Post a single advisory comment with: ranked findings table, ATT&CK mapping, detection coverage, and exact remediation (package + version)
+      # Advisory generation is handled by security-advisory.yml, which triggers
+      # via workflow_run on completion of this workflow. That approach avoids
+      # both the GITHUB_TOKEN comment-trigger restriction and the oauth
+      # workflow-file validation restriction (workflow_run always executes
+      # on the default branch).
 
       # -----------------------------------------------------------------------
       - name: Upload triage artifacts

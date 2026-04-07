@@ -216,22 +216,49 @@ def render_sarif(
             "locations": [],
         }
 
-        # Populate package location from scanner input when available
+        # GitHub Code Scanning requires physicalLocation on every result.
+        # Use the lockfile URI captured from the scanner input when available,
+        # falling back to "uv.lock" (the project's lockfile) so the upload
+        # never fails with "expected a physical location".
         finding = pkgs.get(cve_id)
+        artifact_uri = (finding.source_file if finding else None) or "uv.lock"
+
         if finding and finding.package:
             fqn = finding.package
             if finding.installed_version:
                 fqn = f"{finding.package}:{finding.installed_version}"
             result_entry["locations"] = [{
+                "physicalLocation": {
+                    "artifactLocation": {
+                        "uri": artifact_uri,
+                        "uriBaseId": "%SRCROOT%",
+                    },
+                    "region": {"startLine": 1},
+                },
                 "logicalLocations": [{
                     "name": finding.package,
                     "fullyQualifiedName": fqn,
                     "kind": "package",
-                }]
+                }],
+            }]
+        else:
+            result_entry["locations"] = [{
+                "physicalLocation": {
+                    "artifactLocation": {
+                        "uri": artifact_uri,
+                        "uriBaseId": "%SRCROOT%",
+                    },
+                    "region": {"startLine": 1},
+                },
+                "logicalLocations": [{
+                    "name": cve_id,
+                    "fullyQualifiedName": cve_id,
+                    "kind": "module",
+                }],
             }]
 
-            # Fix version → SARIF fixes array (shown in GitHub Security tab)
-            if finding.fixed_version:
+        # Fix version → SARIF fixes array (shown in GitHub Security tab)
+        if finding and finding.fixed_version:
                 result_entry["fixes"] = [{
                     "description": {
                         "text": f"Upgrade {finding.package} to {finding.fixed_version}"
