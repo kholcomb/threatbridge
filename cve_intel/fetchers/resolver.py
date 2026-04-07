@@ -32,7 +32,13 @@ def fetch_cve_record(cve_id: str, force_refresh: bool = False) -> CVERecord:
     try:
         return NVDFetcher().fetch(cve_id, force_refresh=force_refresh)
     except NVDNotFoundError:
-        logger.info("CVE %s not found in NVD — trying OSV.dev fallback", cve_id)
+        # Retry once — NVD occasionally returns transient 404s that are not
+        # genuine "CVE does not exist" responses.  A second attempt catches
+        # these without masking truly missing CVEs.
+        try:
+            return NVDFetcher().fetch(cve_id, force_refresh=True)
+        except NVDNotFoundError:
+            logger.info("CVE %s not found in NVD after retry — trying OSV.dev fallback", cve_id)
 
     try:
         record = OSVFetcher().fetch(cve_id, force_refresh=force_refresh)
