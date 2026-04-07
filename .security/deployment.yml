@@ -1,0 +1,23 @@
+# Deployment context for security triage qualification
+# Claude uses this to filter which attack vectors are relevant
+
+network:
+  internet_exposed: true          # service is publicly reachable
+  protocols: [https, grpc]
+  ingress: load_balancer          # behind ALB — no direct port exposure
+
+auth:
+  required: true                  # all endpoints require authentication
+  mechanism: jwt                  # JWT bearer tokens
+  privileged_access: false        # no admin/root-level endpoints exposed
+
+runtime:
+  platform: linux
+  container: true                 # runs in Docker on Kubernetes
+  cloud: aws
+  egress_filtering: true          # outbound connections restricted to allowlist
+
+stack:
+  language: python
+  frameworks: [fastapi]
+  dependencies_managed_by: uv
