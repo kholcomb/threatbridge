@@ -1,0 +1,64 @@
+name: Prescripts Supply-Chain Scan
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # upload SARIF to GitHub Security tab
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  prescripts:
+    name: Scan install scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "24"
+
+      # prescripts isn't on npm yet — clone, build, and pack from the tagged
+      # release so the composite action can install from the local tarball.
+      - name: Build and pack prescripts
+        id: pack
+        run: |
+          git clone --depth 1 --branch v0.1.0 https://github.com/kholcomb/prescripts.git /tmp/prescripts
+          cd /tmp/prescripts
+          npm ci --quiet
+          npm run build --quiet
+          TARBALL=$(npm pack --quiet | tail -1)
+          echo "tarball=/tmp/prescripts/${TARBALL}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan dependencies for supply-chain threats
+        id: scan
+        uses: kholcomb/prescripts@f29d662aaf8f7f7150b21d3a9b25683d127d9938  # v0.1.0
+        with:
+          min-risk: medium
+          upload-sarif: true
+          version: ${{ steps.pack.outputs.tarball }}
+        # Exit code 1 = findings at or above min-risk threshold (not a scanner
+        # error). Findings are reported to the Security tab via SARIF upload.
+        # Remove continue-on-error to make this a hard gate.
+        continue-on-error: true
+
+      - name: Upload scan artifacts
+        if: always() && steps.scan.outputs.json-file != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: prescripts-results
+          path: ${{ steps.scan.outputs.json-file }}
+          retention-days: 30
