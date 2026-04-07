@@ -49,8 +49,7 @@ def _check_anthropic_key(full_check: bool) -> CheckResult:
             "Not set — Claude enrichment, IOC extraction, and rule generation disabled.",
         )
     if not full_check:
-        masked = key[:8] + "…" + key[-4:] if len(key) > 12 else "****"
-        return CheckResult("ANTHROPIC_API_KEY", "PASS", f"Present ({masked})")
+        return CheckResult("ANTHROPIC_API_KEY", "PASS", "Present")
 
     # Live ping
     try:
@@ -70,8 +69,7 @@ def _check_nvd_key() -> CheckResult:
             "WARN",
             "Not set — NVD rate-limited to ~5 req/30 s. Set key for 50 req/30 s.",
         )
-    masked = key[:8] + "…" + key[-4:] if len(key) > 12 else "****"
-    return CheckResult("NVD_API_KEY", "PASS", f"Present ({masked}) — higher rate limit active.")
+    return CheckResult("NVD_API_KEY", "PASS", "Present — higher rate limit active.")
 
 
 def _check_cache() -> list[CheckResult]:
