@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.2",
+    "pytest>=9.0.3",
     "pytest-mock>=3.14",
     "responses>=0.25",
 ]
@@ -45,7 +45,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "pytest-mock>=3.15.1",
     "responses>=0.26.0",
 ]
